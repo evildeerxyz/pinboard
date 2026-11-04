@@ -31,9 +31,13 @@ pub struct Photo {
     pub bytes: u64,
     /// Lowercase extension, like "jpg".
     pub ext: String,
+    /// Its size is only known roughly (from a thumbnail), so it isn't shown.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub approx: bool,
 }
 
-const ATTRS: [&str; 5] = [
+/// The Spotlight attributes read for each picture, in this order.
+pub const ATTRS: [&str; 5] = [
     "kMDItemPixelWidth",
     "kMDItemPixelHeight",
     "kMDItemIsScreenCapture",
@@ -204,7 +208,48 @@ fn parse(record: &str, home: &str, skip_small: bool) -> Option<Photo> {
 
     let name = Path::new(path).file_name()?.to_string_lossy().to_string();
     let folder = Path::new(rel).parent().map(|p| p.display().to_string()).unwrap_or_default();
-    Some(Photo { id: id_for(path), path: path.to_string(), name, folder, width, height, screenshot, camera, taken, modified, bytes, ext })
+    Some(Photo { id: id_for(path), path: path.to_string(), name, folder, width, height, screenshot, camera, taken, modified, bytes, ext, approx: false })
+}
+
+/// A picture opened from Finder that the scan doesn't list (in a code folder, too small, outside the
+/// home folder…), described from Spotlight's attributes for it, as `mdls -raw` prints them (one per
+/// entry of `ATTRS`, "(null)" when it has none). Only real picture files.
+pub fn opened_photo(path: &str, home: &str, mdls: &str) -> Option<Photo> {
+    if !is_image(path) {
+        return None;
+    }
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let values: Vec<Option<&str>> = mdls.split('\0').map(|v| v.trim()).map(|v| (!v.is_empty() && v != "(null)").then_some(v)).collect();
+    let value = |i: usize| values.get(i).copied().flatten();
+    let width: u32 = value(0).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let height: u32 = value(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let ms = |t: std::io::Result<std::time::SystemTime>| t.ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64);
+    let modified = ms(meta.modified()).unwrap_or(0);
+    let taken = value(4).and_then(parse_date).or_else(|| ms(meta.created())).unwrap_or(modified);
+    let parent = Path::new(path).parent().map(|p| p.display().to_string()).unwrap_or_default();
+    // Inside the home folder it's named like the rest ("Downloads/Trip"); elsewhere, by its full path.
+    let folder = match parent.strip_prefix(home) {
+        Some(rel) if rel.is_empty() || rel.starts_with('/') => rel.trim_start_matches('/').to_string(),
+        _ => parent,
+    };
+    Some(Photo {
+        id: id_for(path),
+        path: path.to_string(),
+        name: Path::new(path).file_name()?.to_string_lossy().to_string(),
+        folder,
+        width,
+        height,
+        screenshot: value(2) == Some("1"),
+        camera: value(3).map(|v| v.trim_matches('"').to_string()).filter(|v| !v.is_empty()),
+        taken,
+        modified,
+        bytes: meta.len(),
+        ext: Path::new(path).extension()?.to_str()?.to_lowercase(),
+        approx: false,
+    })
 }
 
 fn skipped(rel: &str) -> bool {
@@ -320,6 +365,28 @@ mod tests {
         let rec = format!("{}   kMDItemPixelWidth = 1200   kMDItemPixelHeight = 900", script.display());
         assert!(parse(&rec, &home_str, true).is_none());
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn describes_a_picture_opened_from_finder() {
+        let dir = std::env::temp_dir().join(format!("pinboard-opened-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let picture = dir.join("Card 01.jpg");
+        std::fs::write(&picture, b"jpeg").unwrap();
+        let path = picture.to_string_lossy().to_string();
+        let photo = opened_photo(&path, "/nowhere", "4032\x003024\x00(null)\x00iPhone 16 Pro\x002026-11-04 09:30:23 +0000\n").expect("described");
+        assert_eq!((photo.width, photo.height, photo.screenshot), (4032, 3024, false));
+        assert_eq!(photo.camera.as_deref(), Some("iPhone 16 Pro"));
+        assert_eq!(photo.folder, dir.display().to_string(), "outside home: its full folder");
+        assert_eq!(photo.id, id_for(&path));
+        // Inside the home folder, the folder is relative, like the scan's.
+        let home = dir.parent().unwrap().to_string_lossy().to_string();
+        assert_eq!(opened_photo(&path, &home, "").unwrap().folder, dir.file_name().unwrap().to_string_lossy());
+        // Not a picture: refused, whatever Spotlight says.
+        let script = dir.join("run.command");
+        std::fs::write(&script, b"#!/bin/sh").unwrap();
+        assert!(opened_photo(&script.to_string_lossy(), "/nowhere", "100\x00100").is_none());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

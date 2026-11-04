@@ -8,5 +8,22 @@
 	<string>Pinboard shows the pictures on your Desktop. Nothing leaves your Mac.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Pinboard shows the pictures in your Documents folder. Nothing leaves your Mac.</string>
+	<!-- Pinboard can open any picture from Finder (Open With, or as the default app). Alternate: it
+	     never takes over a picture type by itself; you choose it, or turn it on in Settings. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Picture</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.image</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

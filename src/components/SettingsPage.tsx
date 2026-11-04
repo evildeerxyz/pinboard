@@ -2,7 +2,7 @@ import { Button, Segmented, Switch, toast } from '@basedraft/ui';
 import { CheckCircleIcon, EyeSlashIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState, type ReactNode } from 'react';
-import { openPrivacySettings } from '../lib/api';
+import { isDefaultViewer, openPrivacySettings, setDefaultViewer } from '../lib/api';
 import { count, sizeOf } from '../lib/library';
 import type { Settings } from '../lib/settings';
 
@@ -34,6 +34,17 @@ export function SettingsPage({
   const [cache, setCache] = useState<number | null>(null);
   const measure = () => void invoke<number>('cache_size').then(setCache).catch(() => setCache(null));
   useEffect(measure, []);
+  /** Whether pictures open in Pinboard from Finder (null until macOS says, or while it's changing). */
+  const [finder, setFinder] = useState<boolean | null>(null);
+  const checkFinder = () => void isDefaultViewer().then((on) => setFinder(!!on)).catch(() => setFinder(false));
+  useEffect(checkFinder, []);
+  const changeFinder = (on: boolean) => {
+    setFinder(null);
+    void setDefaultViewer(on)
+      .then(() => toast(on ? 'Pictures open in Pinboard now' : 'Pictures open in Preview again', { description: on ? 'Double-click one in Finder to try it.' : undefined, tone: 'ok', duration: 2600 }))
+      .catch((e) => toast("Couldn't change it", { description: String(e), tone: 'stop' }))
+      .finally(checkFinder);
+  };
 
   const scanChange = (patch: Partial<Settings>) => {
     update(patch);
@@ -94,6 +105,12 @@ export function SettingsPage({
       </Section>
 
       <Section title="Viewer">
+        <Row
+          title="Open pictures from Finder in Pinboard"
+          detail="Double-click a JPEG, PNG, HEIC, WebP, GIF or TIFF in Finder and it opens here, among the others in its folder, instead of in Preview. Turn it off to go back to Preview. For one picture at a time, right-click it in Finder and choose Open With › Pinboard."
+        >
+          <Switch checked={!!finder} disabled={finder === null} onCheckedChange={changeFinder} aria-label="Open pictures from Finder in Pinboard" />
+        </Row>
         <Row title="Filmstrip" detail="The photos around the one you're looking at, along the bottom, to jump to.">
           <Switch checked={settings.filmstrip} onCheckedChange={(v) => update({ filmstrip: v })} aria-label="Filmstrip" />
         </Row>

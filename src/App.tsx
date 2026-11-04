@@ -42,6 +42,7 @@ import {
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { PhotoViewer, type ViewerPhoto } from './basedraft/photo-viewer';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import appIcon from './assets/app-icon.png';
 import { FilterMenu, type FilterGroup } from './components/FilterMenu';
@@ -51,7 +52,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { Tip } from './components/Tip';
 import { COLUMN_WIDTH, RESCAN_AFTER, useSettings } from './lib/settings';
 import { Sidebar, type NavItem } from './components/Sidebar';
-import { copyPhoto, copyPhotos, openPhoto, openPhotos, openPrivacySettings, putBack, reveal, revealPhotos, scanLibrary, thumbUrl, trashPhotos } from './lib/api';
+import { copyPhoto, copyPhotos, openPhoto, openPhotos, openPrivacySettings, putBack, reveal, revealPhotos, scanLibrary, takeOpened, thumbUrl, trashPhotos, type Photo } from './lib/api';
 import { APP_NAME } from './lib/brand';
 import { CATEGORIES, FILTERS, FILTER_GROUPS, classify, pictures, dateOf, flattenFolders, folderTree, inFolder, matches, sizeOf, type CategoryId, type Indexed } from './lib/library';
 
@@ -137,7 +138,9 @@ export function App() {
   const anchor = useRef<string | null>(null);
   /** The photos waiting on "Move to Trash?". */
   const [toTrash, setToTrash] = useState<Indexed[] | null>(null);
-  const [viewer, setViewer] = useState<{ list: Indexed[]; start: number } | null>(null);
+  /** The viewer: what it shows and where it starts. `key` is new for each picture opened from Finder,
+   * so a viewer that's already open starts again on it rather than staying where it was. */
+  const [viewer, setViewer] = useState<{ list: Indexed[]; start: number; key?: number } | null>(null);
   const [palette, setPalette] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   /** Full screen hides the traffic lights, so the app's icon takes their place. */
@@ -317,6 +320,40 @@ export function App() {
   goRef.current = go;
 
   useEffect(() => scroller.current?.scrollTo({ top: 0 }), [query, filters]);
+
+  // Pictures opened from Finder (a double-click, Open With) go straight to the viewer: one picture
+  // among the others in its folder, which the grid shows behind it; several, just those. They can
+  // arrive before the library has loaded, so they wait for it.
+  const [opened, setOpened] = useState<{ ids: string[]; extra: Photo[] } | null>(null);
+  useEffect(() => {
+    const take = () =>
+      void takeOpened()
+        .then((got) => got.ids.length && setOpened((now) => (now ? { ids: [...now.ids, ...got.ids], extra: [...now.extra, ...got.extra] } : got)))
+        .catch(() => {});
+    take();
+    let off: (() => void) | undefined;
+    void listen('opened', take)
+      .then((un) => (off = un))
+      .catch(() => {});
+    return () => off?.();
+  }, []);
+  useEffect(() => {
+    if (!opened || !photos) return;
+    setOpened(null);
+    const byId = new Map(photos.map((p) => [p.id, p]));
+    const extra = classify(opened.extra.filter((p) => !byId.has(p.id)));
+    for (const p of extra) byId.set(p.id, p);
+    const picked = [...new Set(opened.ids)].map((id) => byId.get(id)).filter((p): p is Indexed => !!p);
+    if (!picked.length) return;
+    const one = picked.length === 1 ? picked[0] : null;
+    if (one && !extra.includes(one)) {
+      const list = photos.filter((p) => p.folder === one.folder);
+      go(one.folder ? `folder:${one.folder}` : 'all');
+      setViewer({ list, start: Math.max(0, list.indexOf(one)), key: Date.now() });
+    } else {
+      setViewer({ list: picked, start: 0, key: Date.now() });
+    }
+  }, [opened, photos, go]);
   // A new view, a new search or new filters start with nothing ticked.
   useEffect(() => {
     setSelected(new Set());
@@ -447,7 +484,7 @@ export function App() {
         caption: (
           <span title={p.path} className="flex min-w-0 max-w-full items-center justify-center gap-2.5 whitespace-nowrap">
             <span className="min-w-0 truncate font-medium text-white">{p.name}</span>
-            {[p.folder.split('/').pop() || 'Home', dateOf(p.taken), p.width && p.height ? `${p.width} × ${p.height}` : null, sizeOf(p.bytes), p.camera]
+            {[p.folder.split('/').pop() || 'Home', dateOf(p.taken), p.width && p.height && !p.approx ? `${p.width} × ${p.height}` : null, sizeOf(p.bytes), p.camera]
               .filter(Boolean)
               .map((bit, i) => (
                 <span key={i} className="flex shrink-0 items-center gap-2.5 text-white/50">
@@ -711,6 +748,7 @@ export function App() {
 
       {viewer && (
         <PhotoViewer
+          key={viewer.key}
           photos={viewerPhotos}
           start={viewer.start}
           container={panel}

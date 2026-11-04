@@ -5,13 +5,14 @@ use index::Photo;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSPasteboard, NSPasteboardWriting, NSWorkspace};
-use objc2_foundation::{NSArray, NSFileManager, NSString, NSURL};
+use objc2_foundation::{NSArray, NSBundle, NSError, NSFileManager, NSString, NSURL};
+use objc2_uniform_type_identifiers::UTType;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::http::{header, Response, StatusCode};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::Semaphore;
 
 /// What the window may look at: the indexed pictures, by id. Thumbnails and Finder actions only
@@ -23,6 +24,10 @@ struct Library {
     trashed: Mutex<HashMap<String, Trashed>>,
     /// Thumbnails Quick Look couldn't make (id, size and modification time), so they aren't asked for again.
     failed: Mutex<HashSet<String>>,
+    /// Pictures Finder handed to Pinboard (a double-click, Open With), waiting for the window.
+    pending: Mutex<Vec<String>>,
+    /// Opened pictures the scan doesn't list, kept so they stay viewable after a rescan.
+    opened: Mutex<HashMap<String, Photo>>,
 }
 
 /// An indexed picture: where it is, when it last changed, and how many pixels Spotlight says it has.
@@ -31,6 +36,10 @@ struct Entry {
     path: PathBuf,
     modified: i64,
     pixels: u64,
+}
+
+fn entry_for(p: &Photo) -> Entry {
+    Entry { path: PathBuf::from(&p.path), modified: p.modified, pixels: p.width as u64 * p.height as u64 }
 }
 
 /// Pictures bigger than this aren't thumbnailed: a small file can unpack into gigabytes.
@@ -74,7 +83,10 @@ async fn scan_library(options: Option<index::ScanOptions>, library: State<'_, Ar
     })
     .await
     .map_err(|e| e.to_string())?;
-    let map = scan.photos.iter().map(|p| (p.id.clone(), Entry { path: PathBuf::from(&p.path), modified: p.modified, pixels: p.width as u64 * p.height as u64 })).collect();
+    let mut map: HashMap<String, Entry> = scan.photos.iter().map(|p| (p.id.clone(), entry_for(p))).collect();
+    for (id, p) in library.opened.lock().unwrap().iter() {
+        map.entry(id.clone()).or_insert_with(|| entry_for(p));
+    }
     *library.photos.write().unwrap() = map;
     Ok(scan)
 }
@@ -278,6 +290,131 @@ fn copy_photo(id: String, library: State<'_, Arc<Library>>) -> Result<(), String
     copy_photos(vec![id], library)
 }
 
+/// Files Finder asks Pinboard to open. Only picture files are taken. One the scan doesn't list is
+/// described from Spotlight (`mdls`, so nothing is decoded here) and added, so it can be shown.
+/// Then the window is told, and brought forward.
+fn open_files(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
+    let library = app.state::<Arc<Library>>().inner().clone();
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let home = home().map(|h| h.to_string_lossy().to_string()).unwrap_or_default();
+        let mut ids = Vec::new();
+        for url in urls {
+            let Ok(path) = url.to_file_path() else { continue };
+            let Some(text) = path.to_str() else { continue };
+            if !index::is_image(text) || !path.is_file() {
+                continue;
+            }
+            let id = index::id_for(text);
+            if !library.photos.read().unwrap().contains_key(&id) {
+                let Some(photo) = describe(&path, &home) else { continue };
+                library.photos.write().unwrap().insert(id.clone(), entry_for(&photo));
+                library.opened.lock().unwrap().insert(id.clone(), photo);
+            }
+            ids.push(id);
+        }
+        if ids.is_empty() {
+            return;
+        }
+        library.pending.lock().unwrap().extend(ids);
+        let _ = app.emit("opened", ());
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    });
+}
+
+/// A record for a picture the scan doesn't list, from Spotlight's attributes. If Spotlight doesn't
+/// know its size, a Quick Look thumbnail gives its shape (the size is then marked rough).
+fn describe(path: &Path, home: &str) -> Option<Photo> {
+    let mut mdls = Command::new("/usr/bin/mdls");
+    mdls.arg("-raw");
+    for attr in index::ATTRS {
+        mdls.args(["-name", attr]);
+    }
+    let out = mdls.arg(path).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let mut photo = index::opened_photo(&path.to_string_lossy(), home, &out)?;
+    if photo.width == 0 || photo.height == 0 {
+        if let Some(t) = thumbs::make(path, 512, false) {
+            (photo.width, photo.height, photo.approx) = (t.width as u32, t.height as u32, true);
+        }
+    }
+    Some(photo)
+}
+
+#[derive(serde::Serialize)]
+struct Opened {
+    /// What Finder opened, in order.
+    ids: Vec<String>,
+    /// Records for any of them the scan doesn't list.
+    extra: Vec<Photo>,
+}
+
+/// The pictures Finder opened since the window last asked (each is handed over once).
+#[tauri::command]
+fn take_opened(library: State<'_, Arc<Library>>) -> Opened {
+    let ids = std::mem::take(&mut *library.pending.lock().unwrap());
+    let opened = library.opened.lock().unwrap();
+    let extra = ids.iter().filter_map(|id| opened.get(id).cloned()).collect();
+    Opened { ids, extra }
+}
+
+/// The picture types "Open pictures from Finder in Pinboard" changes.
+const VIEWER_TYPES: [&str; 9] = ["public.jpeg", "public.png", "public.heic", "public.heif", "org.webmproject.webp", "com.compuserve.gif", "public.tiff", "com.microsoft.bmp", "public.avif"];
+const PREVIEW: &str = "/System/Applications/Preview.app";
+
+fn content_type(id: &str) -> Option<Retained<UTType>> {
+    UTType::typeWithIdentifier(&NSString::from_str(id))
+}
+
+/// This app, when it's running as an installed app (not `tauri dev`).
+fn this_app() -> Option<Retained<NSURL>> {
+    let url = NSBundle::mainBundle().bundleURL();
+    url.path().is_some_and(|p| p.to_string().ends_with(".app")).then_some(url)
+}
+
+/// Whether double-clicking a JPEG or PNG in Finder opens Pinboard.
+#[tauri::command]
+fn is_default_viewer() -> bool {
+    let Some(me) = this_app().and_then(|u| u.path()).map(|p| p.to_string()) else { return false };
+    let workspace = NSWorkspace::sharedWorkspace();
+    ["public.jpeg", "public.png"]
+        .iter()
+        .all(|t| content_type(t).and_then(|t| workspace.URLForApplicationToOpenContentType(&t)).and_then(|u| u.path()).is_some_and(|p| p.to_string() == me))
+}
+
+/// Makes Pinboard (or, turned off, Preview) the app pictures open in from Finder. macOS may ask
+/// you to confirm.
+#[tauri::command]
+async fn set_default_viewer(on: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let app = if on { this_app().ok_or("Only the installed Pinboard can do this.")? } else { NSURL::fileURLWithPath(&NSString::from_str(PREVIEW)) };
+        let workspace = NSWorkspace::sharedWorkspace();
+        let mut failed = 0;
+        for id in VIEWER_TYPES {
+            let Some(kind) = content_type(id) else { continue };
+            let (done, result) = std::sync::mpsc::sync_channel::<bool>(1);
+            let handler = block2::RcBlock::new(move |error: *mut NSError| {
+                let _ = done.try_send(error.is_null());
+            });
+            workspace.setDefaultApplicationAtURL_toOpenContentType_completionHandler(&app, &kind, Some(&handler));
+            // Waits while macOS asks you to confirm, if it does.
+            if !result.recv_timeout(std::time::Duration::from_secs(120)).unwrap_or(false) {
+                failed += 1;
+            }
+        }
+        if failed == 0 {
+            Ok(())
+        } else {
+            Err(format!("macOS didn't change {failed} of the picture types."))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn respond(status: StatusCode, mime: &str, body: Vec<u8>) -> Response<Vec<u8>> {
     Response::builder()
         .status(status)
@@ -394,9 +531,15 @@ pub fn run() {
                 responder.respond(response);
             });
         })
-        .invoke_handler(tauri::generate_handler![scan_library, reveal, open_photo, copy_photo, open_privacy_settings, cache_size, clear_cache, reveal_folder, reveal_photos, open_photos, copy_photos, trash, put_back])
-        .run(tauri::generate_context!())
-        .expect("error while running Pinboard");
+        .invoke_handler(tauri::generate_handler![scan_library, reveal, open_photo, copy_photo, open_privacy_settings, cache_size, clear_cache, reveal_folder, reveal_photos, open_photos, copy_photos, trash, put_back, take_opened, is_default_viewer, set_default_viewer])
+        .build(tauri::generate_context!())
+        .expect("error while building Pinboard")
+        .run(|app, event| {
+            // A picture double-clicked in Finder, or sent with Open With (at launch, or later).
+            if let tauri::RunEvent::Opened { urls } = event {
+                open_files(app, urls);
+            }
+        });
 }
 
 #[cfg(test)]

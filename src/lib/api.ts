@@ -15,6 +15,8 @@ export type Photo = {
   modified: number;
   bytes: number;
   ext: string;
+  /** Its size is only known roughly (from a thumbnail), so it isn't shown. */
+  approx?: boolean;
 };
 
 /** Every picture, and the guarded folders (Downloads, Desktop, Documents) macOS didn't let it look in. */
@@ -32,6 +34,13 @@ export const copyPhotos = (ids: string[]) => invoke('copy_photos', { ids });
 export const trashPhotos = (ids: string[]) => invoke<{ trashed: string[]; failed: string[] }>('trash', { ids });
 /** Undo: puts pictures Pinboard moved to the Trash back where they were. The ids that went back. */
 export const putBack = (ids: string[]) => invoke<string[]>('put_back', { ids });
+
+/** Pictures Finder asked Pinboard to open (a double-click, Open With): their ids, in order, and
+ * records for any the scan doesn't list. Each is handed over once. */
+export const takeOpened = () => invoke<{ ids: string[]; extra: Photo[] }>('take_opened');
+/** Whether pictures open in Pinboard from Finder, and changing that (off goes back to Preview). */
+export const isDefaultViewer = () => invoke<boolean>('is_default_viewer');
+export const setDefaultViewer = (on: boolean) => invoke('set_default_viewer', { on });
 
 /** Opens a folder (relative to the home folder) in Finder. */
 export const revealFolder = (folder: string) => invoke('reveal_folder', { folder });

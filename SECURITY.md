@@ -12,7 +12,7 @@ Pinboard runs on your Mac with your user's permissions. It isn't sandboxed, beca
 
 - It makes no network requests. The window can't load anything from the internet (see the content security policy in `src-tauri/tauri.conf.json`), can't go to any page but Pinboard's own, and only has the few window permissions it uses (`src-tauri/capabilities/default.json`).
 - The window can only refer to pictures by the ids Pinboard gave them when it indexed your home folder. It can't name an arbitrary file to open, move or read, and Show in Finder only shows folders that hold pictures, without opening them.
-- Only files with picture extensions are ever listed, so nothing in Pinboard can open an app or a script, whatever its name.
+- Only files with picture extensions are ever listed, so nothing in Pinboard can open an app or a script, whatever its name. The same goes for files Finder hands to Pinboard (a double-click, Open With): anything that isn't a picture file is ignored, and the rest are described from Spotlight, not decoded.
 - The only change it makes to your files is moving pictures you select to the Trash. Undo can only put back pictures Pinboard itself moved, to the place they came from.
 - Pictures are never decoded inside Pinboard. Thumbnails are made by Quick Look in macOS's own sandboxed thumbnail service, so a malformed or malicious image can't run code with Pinboard's access to your folders. Pinboard only encodes the finished thumbnail, and keeps it in `~/Library/Caches/app.pinboard.photos`. Pictures over 250 megapixels are skipped.
 

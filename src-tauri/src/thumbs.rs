@@ -20,6 +20,9 @@ use std::time::Duration;
 pub struct Thumbnail {
     pub bytes: Vec<u8>,
     pub mime: &'static str,
+    /// Its size in pixels.
+    pub width: usize,
+    pub height: usize,
 }
 
 /// How long to wait for Quick Look before giving up on a picture.
@@ -73,7 +76,7 @@ fn encode(image: &CGImage, may_be_clear: bool) -> Option<Thumbnail> {
             return None;
         }
     }
-    Some(Thumbnail { bytes: data.to_vec(), mime })
+    Some(Thumbnail { bytes: data.to_vec(), mime, width: CGImage::width(Some(image)), height: CGImage::height(Some(image)) })
 }
 
 #[cfg(test)]

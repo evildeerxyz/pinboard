@@ -1,6 +1,6 @@
 [package]
 name = "pinboard"
-version = "0.1.1"
+version = "0.1.2"
 description = "Pinboard: every picture on your Mac, in one place."
 edition = "2021"
 license = "MIT"
@@ -29,8 +29,9 @@ objc2-core-foundation = "0.3"
 objc2-core-graphics = "0.3"
 objc2-image-io = "0.3"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSError", "NSFileManager", "NSString", "NSURL"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSError", "NSFileManager", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-uniform-type-identifiers", "NSPasteboard", "NSWorkspace"] }
+objc2-uniform-type-identifiers = { version = "0.3", default-features = false, features = ["std", "UTType"] }
 objc2-quick-look-thumbnailing = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-core-graphics", "QLThumbnailGenerator", "QLThumbnailGenerationRequest", "QLThumbnailRepresentation"] }
 block2 = "0.6"
 

@@ -37,19 +37,45 @@ const server = createServer((req, res) => {
 }).listen(1431, '127.0.0.1');
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--hide-scrollbars'] });
-const page = await browser.newPage();
-await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 2 });
-await page.evaluateOnNewDocument((lib) => {
+/** The app's commands, answered from the dump. `opened` is what Finder hands over at launch. */
+const mock = (lib, opened) => {
   window.__calls = [];
+  window.__default = false;
+  window.__opened = opened ?? { ids: [], extra: [] };
   window.__shapes = Object.fromEntries(JSON.parse(lib).map((p) => [p.id, p.width && p.height ? p.width / p.height : 0]));
+  const answers = {
+    scan_library: () => ({ photos: JSON.parse(lib), blocked: [] }),
+    cache_size: () => 123_400_000,
+    trash: (args) => ({ trashed: args.ids, failed: [] }),
+    put_back: (args) => args.ids,
+    take_opened: () => {
+      const got = window.__opened;
+      window.__opened = { ids: [], extra: [] };
+      return got;
+    },
+    is_default_viewer: () => window.__default,
+    set_default_viewer: (args) => void (window.__default = args.on),
+  };
+  // Events from the app: listen() hands over a callback id; __emit calls them.
+  const callbacks = new Map();
+  const listeners = [];
+  answers['plugin:event|listen'] = (args) => (listeners.push(args), listeners.length);
+  window.__emit = (event) => listeners.filter((l) => l.event === event).forEach((l) => callbacks.get(l.handler)?.({ event, id: 0, payload: null }));
   window.__TAURI_INTERNALS__ = {
-    invoke: async (cmd, args) => (window.__calls.push([cmd, args]), cmd === 'scan_library' ? { photos: JSON.parse(lib), blocked: [] } : cmd === 'cache_size' ? 123_400_000 : cmd === 'trash' ? { trashed: args.ids, failed: [] } : cmd === 'put_back' ? args.ids : null),
+    invoke: async (cmd, args) => (window.__calls.push([cmd, args]), answers[cmd] ? answers[cmd](args) : null),
     convertFileSrc: (id) => `http://127.0.0.1:1431/thumb/${encodeURIComponent(id)}`,
-    transformCallback: () => 0,
+    transformCallback: (fn) => {
+      const id = callbacks.size + 1;
+      callbacks.set(id, fn);
+      return id;
+    },
   };
   // The desktop behind the see-through window.
   addEventListener('DOMContentLoaded', () => (document.documentElement.style.background = 'linear-gradient(160deg,#4a5568,#1f2937)'));
-}, library);
+};
+const page = await browser.newPage();
+await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 2 });
+await page.evaluateOnNewDocument(mock, library);
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 
@@ -520,6 +546,63 @@ await check('small cards keep only what fits: icon buttons, no folder line on sh
   await clickText('main [role="radio"]', 'Medium');
   await clickText('aside nav button', 'All Photos');
   await wait(500);
+});
+
+await check('a picture opened from Finder shows in the viewer, among the others in its folder', async () => {
+  // A picture in a folder with a few others.
+  const counts = tally((p) => p.folder);
+  const folder = counts.find((f) => f && photos.filter((p) => p.folder === f).length >= 3);
+  const inFolder = photos.filter((p) => p.folder === folder);
+  const target = inFolder[1];
+  const finder = await browser.newPage();
+  await finder.setViewport({ width: 1320, height: 860 });
+  await finder.evaluateOnNewDocument(mock, library, { ids: [target.id], extra: [] });
+  await finder.goto('http://localhost:1430', { waitUntil: 'networkidle0' });
+  await wait(1300);
+  const seen = await finder.evaluate(() => ({
+    title: document.querySelector('main header h1')?.textContent,
+    counter: [...document.querySelectorAll('[role="dialog"] span')].map((s) => s.textContent ?? '').find((t) => / of /.test(t)) ?? '',
+    caption: document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '',
+  }));
+  expect(seen.counter === `2 of ${inFolder.length.toLocaleString()}`, `counter ${seen.counter}, want 2 of ${inFolder.length}`);
+  expect(seen.caption.startsWith(target.name), `caption ${seen.caption}`);
+  expect(seen.title === folder.split('/').pop(), `behind it: ${seen.title}, want ${folder}`);
+  await finder.screenshot({ path: join(OUT, 'opened-from-finder.png') });
+  // Another picture opened while the viewer is up starts the viewer again on that one.
+  const next = inFolder[2];
+  await finder.evaluate((id) => (window.__opened = { ids: [id], extra: [] }), next.id);
+  await finder.evaluate(() => window.__emit?.('opened'));
+  await wait(900);
+  const again = await finder.evaluate(() => document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '');
+  expect(again.startsWith(next.name), `after a second open: ${again}`);
+  await finder.close();
+
+  // One the scan doesn't list (on a memory card, say) still opens, from the record Pinboard made.
+  const card = { ...photos[0], id: 'ffffffffffffff01', path: '/Volumes/Card/DCIM/IMG_0001.jpg', name: 'IMG_0001.jpg', folder: '/Volumes/Card/DCIM', approx: true };
+  const outside = await browser.newPage();
+  await outside.setViewport({ width: 1320, height: 860 });
+  await outside.evaluateOnNewDocument(mock, library, { ids: [card.id], extra: [card] });
+  await outside.goto('http://localhost:1430', { waitUntil: 'networkidle0' });
+  await wait(1300);
+  const caption = await outside.evaluate(() => document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '');
+  expect(caption.startsWith('IMG_0001.jpg') && caption.includes('DCIM') && !caption.includes(' × '), `caption ${caption}`);
+  await outside.close();
+});
+
+await check('Settings can make Pinboard the app pictures open in from Finder', async () => {
+  await clickText('aside button', 'Settings');
+  await wait(500);
+  const toggle = 'main [role="switch"][aria-label="Open pictures from Finder in Pinboard"]';
+  expect((await page.$eval(toggle, (b) => b.getAttribute('aria-checked'))) === 'false', 'should start off');
+  await page.click(toggle);
+  await wait(500);
+  const call = await page.evaluate(() => window.__calls.filter((c) => c[0] === 'set_default_viewer').at(-1)?.[1]);
+  expect(call?.on === true, `asked ${JSON.stringify(call)}`);
+  expect((await page.$eval(toggle, (b) => b.getAttribute('aria-checked'))) === 'true', 'switch did not turn on');
+  await page.click(toggle);
+  await wait(400);
+  await clickText('aside nav button', 'All Photos');
+  await wait(300);
 });
 
 await check('a folder macOS keeps closed gets a notice with a way to open it', async () => {
