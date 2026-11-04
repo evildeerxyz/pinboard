@@ -29,7 +29,7 @@ Pinboard finds the photos, screenshots and saved images spread across your home 
 - **Search with ⌘K.** Jump to any folder or photo by its name, its folder or a month like "october".
 - **Filter from one button.** Narrow any view by shape, kind, format or the folders inside it. Tick as many as you like.
 - **A viewer with a filmstrip.** Photos open inside the window, with the ones around them along the bottom. Arrow keys move, Escape closes.
-- **Opens pictures from Finder.** Double-click a photo and it opens on its own, filling the window like Preview, with the others in its folder along the bottom. **See folder in Pinboard** opens the whole app there.
+- **Opens pictures from Finder.** Double-click a photo and it opens on its own, filling the window like Preview: its name in the title bar, the others in its folder along the bottom. **See folder in Pinboard** opens the whole app there.
 - **Light and dark.** Auto follows your Mac; Settings can keep it light or dark. The photo viewer stays dark either way.
 - **Tidy up in bulk.** Select photos with ⌘-click or Shift-click, then Favorite, Copy, Show in Finder, Open or Move to Trash from the bar at the bottom. Moving to the Trash can be undone.
 - **Settings for the details:** card size, viewer quality, hidden folders, and how often it looks for new pictures.

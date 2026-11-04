@@ -77,10 +77,9 @@ export function PhotoViewer({
   onClose,
   actions,
   filmstrip = true,
-  lead,
-  leadInset = 16,
   backdropCloses = true,
-  barTop = 16,
+  bar = false,
+  title,
 }: {
   photos: ViewerPhoto[];
   start: number;
@@ -94,14 +93,14 @@ export function PhotoViewer({
   actions?: (index: number) => ReactNode;
   /** The strip of nearby photos at the foot. */
   filmstrip?: boolean;
-  /** Something at the top left, level with the buttons (a way into the rest of the app). */
-  lead?: (index: number) => ReactNode;
-  /** How far in from the left it sits (past the window's traffic lights, when they're there). */
-  leadInset?: number;
   /** Whether a click on the dark around the photo closes it. */
   backdropCloses?: boolean;
-  /** Where the row of buttons at the top sits (to line up with the window's traffic lights). */
-  barTop?: number;
+  /** Shown as a window of its own: a title bar level with the traffic lights, with the photo's
+   * name in the middle and its actions at the right, and no Close button (the red light, or
+   * Escape, closes it). Otherwise the buttons float over the photo. */
+  bar?: boolean;
+  /** What the title bar says (the photo's name, and where it is in the list). */
+  title?: (index: number) => ReactNode;
 }) {
   const still = useReducedMotion();
   const [i, setI] = useState(start);
@@ -255,23 +254,33 @@ export function PhotoViewer({
         </motion.div>
       </AnimatePresence>
       <motion.div data-bd-ui="" initial={{ opacity: 0 }} animate={{ opacity: closing ? 0 : 1 }} transition={{ duration: 0.2, delay: closing ? 0 : 0.12 }}>
-        {/* Where you are, at the top, level with the buttons. */}
-        {many && (
-          <span data-bd-ui="" style={{ top: barTop + 6 }} className="absolute left-1/2 -translate-x-1/2 rounded-full bg-white/10 px-3.5 py-1.5 text-[13px] font-medium tabular-nums text-white/85 backdrop-blur-xl">
-            {(i + 1).toLocaleString()} of {photos.length.toLocaleString()}
-          </span>
-        )}
-        {lead && (
-          <div data-bd-ui="" className="absolute flex items-center" style={{ left: leadInset, top: barTop }}>
-            {lead(i)}
+        {bar ? (
+          // A title bar, the way Preview and Quick Look have one: one row level with the traffic
+          // lights, the name in the middle, the actions at the right. It moves the window too.
+          <div data-bd-ui="" data-bar data-tauri-drag-region className="absolute inset-x-0 top-0 flex h-[54px] items-center justify-end pr-3">
+            <div data-bd-ui="" className="pointer-events-none absolute inset-y-0 left-[300px] right-[300px] flex items-center justify-center gap-2 text-[13px]">
+              {title?.(i)}
+            </div>
+            <div data-bd-ui="" className="relative flex items-center gap-1">
+              {actions?.(i)}
+            </div>
           </div>
+        ) : (
+          <>
+            {/* Where you are, at the top, level with the buttons. */}
+            {many && (
+              <span data-bd-ui="" className="absolute left-1/2 top-[22px] -translate-x-1/2 rounded-full bg-white/10 px-3.5 py-1.5 text-[13px] font-medium tabular-nums text-white/85 backdrop-blur-xl">
+                {(i + 1).toLocaleString()} of {photos.length.toLocaleString()}
+              </span>
+            )}
+            <div data-bd-ui="" className="absolute right-4 top-4 flex items-center gap-2">
+              {actions?.(i)}
+              <button data-bd-ui="" type="button" data-close aria-label="Close" onClick={close} className="grid size-10 place-items-center rounded-full bg-white/10 text-white outline-none backdrop-blur-xl transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white">
+                <XIcon weight="regular" className="size-4" />
+              </button>
+            </div>
+          </>
         )}
-        <div data-bd-ui="" className="absolute right-4 flex items-center gap-2" style={{ top: barTop }}>
-          {actions?.(i)}
-          <button data-bd-ui="" type="button" data-close aria-label="Close" onClick={close} className="grid size-10 place-items-center rounded-full bg-white/10 text-white outline-none backdrop-blur-xl transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white">
-            <XIcon weight="regular" className="size-4" />
-          </button>
-        </div>
         {many && (
           <>
             <button data-bd-ui="" type="button" aria-label="Previous photo" onClick={() => go(i - 1)} className="absolute left-4 grid size-11 -translate-y-1/2 place-items-center rounded-full bg-white/10 text-white outline-none backdrop-blur-xl transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white max-sm:hidden" style={{ top: middle }}>

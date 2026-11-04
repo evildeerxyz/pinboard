@@ -531,6 +531,15 @@ pub fn run() {
         // The window only ever shows Pinboard's own pages: any other address is refused.
         .plugin(tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard").on_navigation(|_, url| own_page(url)).build())
         .manage(library)
+        // Closing the window (the red traffic light, ⌘W) puts it away rather than quitting, like
+        // Photos and Preview: Pinboard keeps its place, and the Dock icon brings it back. ⌘Q quits.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+                let _ = window.app_handle().emit("hidden", ());
+            }
+        })
         .register_asynchronous_uri_scheme_protocol("thumb", move |ctx, request, responder| {
             let library = protocol_library.clone();
             let workers = workers.clone();

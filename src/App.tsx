@@ -362,6 +362,15 @@ export function App() {
     void listen('reopened', () => (putAway.current = false))
       .then((un) => offs.push(un))
       .catch(() => {});
+    // The red traffic light put the window away (Pinboard keeps running, like Photos): a picture
+    // from Finder that was up is done with, and the next one is on its own again.
+    void listen('hidden', () => {
+      putAway.current = true;
+      setFinder(null);
+      setViewer(null);
+    })
+      .then((un) => offs.push(un))
+      .catch(() => {});
     return () => offs.forEach((off) => off());
   }, []);
   useEffect(() => {
@@ -526,33 +535,46 @@ export function App() {
         height: p.height,
         caption: (
           <span title={p.path} className="flex min-w-0 max-w-full items-center justify-center gap-2.5 whitespace-nowrap">
-            <span className="min-w-0 truncate font-medium text-white">{p.name}</span>
+            {!finder && <span className="min-w-0 truncate font-medium text-white">{p.name}</span>}
             {[p.folder.split('/').pop() || 'Home', dateOf(p.taken), p.width && p.height && !p.approx ? `${p.width} × ${p.height}` : null, sizeOf(p.bytes), p.camera]
               .filter(Boolean)
               .map((bit, i) => (
                 <span key={i} className="flex shrink-0 items-center gap-2.5 text-white/50">
-                  <span aria-hidden className="size-[3px] rounded-full bg-white/30" />
+                  {(i > 0 || !finder) && <span aria-hidden className="size-[3px] rounded-full bg-white/30" />}
                   {bit}
                 </span>
               ))}
           </span>
         ),
       })),
-    [viewer, settings.quality],
+    [viewer, settings.quality, finder],
   );
 
   const viewerActions = (i: number) => {
     const p = viewer?.list[i];
     if (!p) return null;
     const fav = favorites.has(p.id);
+    const quiet = !!finder;
     return (
       <>
-        <GlassButton label={fav ? 'Remove from Favorites' : 'Add to Favorites'} onClick={() => actions.favorite(p)} active={fav}>
+        <GlassButton label={fav ? 'Remove from Favorites' : 'Add to Favorites'} onClick={() => actions.favorite(p)} active={fav} quiet={quiet}>
           <HeartIcon weight={fav ? 'fill' : 'regular'} className="size-4" />
         </GlassButton>
-        <GlassButton label="Show in Finder" onClick={() => actions.reveal(p)}>
+        <GlassButton label="Show in Finder" onClick={() => actions.reveal(p)} quiet={quiet}>
           <FolderOpenIcon weight="regular" className="size-4" />
         </GlassButton>
+        {/* In a window of its own, the one labelled button: the way into the rest of Pinboard. */}
+        {finder && (
+          <button
+            type="button"
+            data-see-folder
+            onClick={seeFolder}
+            className="ml-2 flex h-[30px] items-center gap-1.5 rounded-full bg-white/[0.13] pl-3 pr-3.5 text-[13px] font-medium text-white outline-none transition-colors hover:bg-white/[0.2] focus-visible:outline-2 focus-visible:outline-white"
+          >
+            <SidebarSimpleIcon className="size-[15px]" />
+            {libraryIds.has(p.id) ? 'See folder in Pinboard' : 'Open Pinboard'}
+          </button>
+        )}
       </>
     );
   };
@@ -807,25 +829,18 @@ export function App() {
           onIndex={(i) => (onScreen.current = viewer.list[i] ?? null)}
           actions={viewerActions}
           backdropCloses={!finder}
-          // On its own (from Finder), the row of buttons lines up with the traffic lights, and a way
-          // into the rest of Pinboard sits beside them.
-          barTop={finder && !fullscreen ? 7 : 16}
-          leadInset={fullscreen ? 16 : 84}
-          lead={
-            finder
-              ? (i) => (
-                  <button
-                    type="button"
-                    data-see-folder
-                    onClick={seeFolder}
-                    className="flex h-10 items-center gap-2 rounded-full bg-white/10 pl-3.5 pr-4 text-[13.5px] font-medium text-white outline-none backdrop-blur-xl transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white"
-                  >
-                    <SidebarSimpleIcon className="size-[17px]" />
-                    {viewer.list[i] && libraryIds.has(viewer.list[i].id) ? 'See folder in Pinboard' : 'Open Pinboard'}
-                  </button>
-                )
-              : undefined
-          }
+          // On its own (from Finder), it's a window of its own: a title bar with the photo's name.
+          bar={!!finder}
+          title={(i) => (
+            <>
+              <span className="min-w-0 truncate font-semibold text-white/90">{viewer.list[i]?.name}</span>
+              {viewer.list.length > 1 && (
+                <span className="shrink-0 tabular-nums text-white/45">
+                  {(i + 1).toLocaleString()} of {viewer.list.length.toLocaleString()}
+                </span>
+              )}
+            </>
+          )}
         />
       )}
 
@@ -846,14 +861,18 @@ export function App() {
 }
 
 /** A round glass button in the viewer, beside Close. */
-function GlassButton({ label, onClick, active, children }: { label: string; onClick: () => void; active?: boolean; children: ReactNode }) {
+/** A round button over a photo. `quiet` is the small, plain kind for a title bar. */
+function GlassButton({ label, onClick, active, quiet, children }: { label: string; onClick: () => void; active?: boolean; quiet?: boolean; children: ReactNode }) {
+  const look = quiet
+    ? `size-[30px] ${active ? 'text-[#ff5a6e] hover:bg-white/10' : 'text-white/75 hover:bg-white/10 hover:text-white'}`
+    : `size-10 backdrop-blur-xl ${active ? 'bg-[#ff5a6e]/85 text-white' : 'bg-white/10 text-white hover:bg-white/20'}`;
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
       onClick={onClick}
-      className={`grid size-10 place-items-center rounded-full outline-none backdrop-blur-xl transition-colors focus-visible:outline-2 focus-visible:outline-white ${active ? 'bg-[#ff5a6e]/85 text-white' : 'bg-white/10 text-white hover:bg-white/20'}`}
+      className={`grid place-items-center rounded-full outline-none transition-colors focus-visible:outline-2 focus-visible:outline-white ${look}`}
     >
       {children}
     </button>

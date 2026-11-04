@@ -563,28 +563,43 @@ await check('a picture opened from Finder shows on its own (no sidebar); See fol
   const finder = await browser.newPage();
   await finder.setViewport({ width: 1320, height: 860 });
   await finder.evaluateOnNewDocument(mock, library, { ids: [target.id], extra: [], cold: true });
+  // The window's traffic lights, drawn where macOS puts them, to see the title bar against them.
+  await finder.evaluateOnNewDocument(() =>
+    addEventListener('DOMContentLoaded', () => {
+      const lights = document.createElement('div');
+      lights.style.cssText = 'position:fixed;left:20px;top:26px;display:flex;gap:8px;z-index:9999;pointer-events:none';
+      for (const c of ['#ff5f57', '#febc2e', '#28c840']) lights.append(Object.assign(document.createElement('span'), { style: `width:12px;height:12px;border-radius:50%;background:${c}` }));
+      document.body.append(lights);
+    }),
+  );
   await finder.goto('http://localhost:1430', { waitUntil: 'networkidle0' });
   await wait(1300);
   const look = () =>
     finder.evaluate(() => {
-      const lead = document.querySelector('[data-see-folder]')?.getBoundingClientRect();
+      const middle = (el) => {
+        const r = el?.getBoundingClientRect();
+        return r ? Math.round(r.top + r.height / 2) : 0;
+      };
+      const bar = document.querySelector('[data-bar]');
       return {
         sidebar: document.querySelector('aside')?.parentElement?.getBoundingClientRect().width,
         title: document.querySelector('main header h1')?.textContent,
-        counter: [...document.querySelectorAll('[role="dialog"] span')].map((s) => s.textContent ?? '').find((t) => / of /.test(t)) ?? '',
+        bar: bar?.textContent ?? '',
         caption: document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '',
         lead: document.querySelector('[data-see-folder]')?.textContent ?? '',
-        leadMiddle: lead ? lead.top + lead.height / 2 : 0,
+        middles: bar ? [...bar.querySelectorAll('button, span')].map(middle) : [],
+        close: !!document.querySelector('[role="dialog"] [data-close]'),
         viewer: !!document.querySelector('[role="dialog"][aria-modal]'),
       };
     });
   let seen = await look();
   expect(seen.sidebar === 0, `sidebar ${seen.sidebar}px wide, want none`);
-  expect(seen.counter === `2 of ${inFolder.length.toLocaleString()}`, `counter ${seen.counter}, want 2 of ${inFolder.length}`);
-  expect(seen.caption.startsWith(target.name), `caption ${seen.caption}`);
-  expect(seen.lead === 'See folder in Pinboard', `lead “${seen.lead}”`);
-  expect(Math.abs(seen.leadMiddle - 32) <= 2, `See folder sits at ${seen.leadMiddle}px, the traffic lights at ~32px`);
+  expect(seen.bar.includes(target.name) && seen.bar.includes(`2 of ${inFolder.length.toLocaleString()}`), `title bar “${seen.bar}”`);
+  expect(!seen.caption.includes(target.name), 'the name is in the caption as well as the title bar');
+  expect(seen.lead === 'See folder in Pinboard' && !seen.close, `lead “${seen.lead}”, close ${seen.close}`);
+  expect(seen.middles.length >= 4 && seen.middles.every((m) => Math.abs(m - 32) <= 1), `title bar not level with the traffic lights (~32px): ${seen.middles}`);
   await finder.screenshot({ path: join(OUT, 'opened-from-finder.png') });
+  await finder.screenshot({ path: join(OUT, 'finder-bar.png'), clip: { x: 0, y: 0, width: 1320, height: 90 } });
 
   // Another picture opened while it's up starts the viewer again on that one.
   const next = inFolder[2];
@@ -592,7 +607,7 @@ await check('a picture opened from Finder shows on its own (no sidebar); See fol
   await finder.evaluate(() => window.__emit?.('opened'));
   await wait(900);
   seen = await look();
-  expect(seen.caption.startsWith(next.name) && seen.sidebar === 0, `after a second open: ${seen.caption}, sidebar ${seen.sidebar}`);
+  expect(seen.bar.includes(next.name) && seen.sidebar === 0, `after a second open: ${seen.bar}, sidebar ${seen.sidebar}`);
 
   // See folder in Pinboard: the whole app, at that folder, with the picture on screen.
   await finder.click('[data-see-folder]');
@@ -629,6 +644,15 @@ await check('a picture opened from Finder shows on its own (no sidebar); See fol
   await cold.keyboard.press('Escape');
   await wait(900);
   expect(await cold.evaluate(() => window.__calls.some((c) => c[0] === 'hide_window')), 'the window was not put away');
+  // The red traffic light, while a picture from Finder is up: it's done with, and Pinboard itself
+  // is what comes back.
+  await cold.evaluate((id) => (window.__opened = { ids: [id], extra: [], cold: false }), target.id);
+  await cold.evaluate(() => window.__emit?.('opened'));
+  await wait(900);
+  await cold.evaluate(() => window.__emit?.('hidden'));
+  await wait(1300);
+  const back = await cold.evaluate(() => ({ viewer: !!document.querySelector('[role="dialog"][aria-modal]'), sidebar: document.querySelector('aside')?.parentElement?.getBoundingClientRect().width }));
+  expect(!back.viewer && back.sidebar === 272, `after the red light: ${JSON.stringify(back)}`);
   await cold.close();
 
   // One the scan doesn't list (on a memory card, say) still opens, from the record Pinboard made.
@@ -639,10 +663,11 @@ await check('a picture opened from Finder shows on its own (no sidebar); See fol
   await outside.goto('http://localhost:1430', { waitUntil: 'networkidle0' });
   await wait(1300);
   const outsideSeen = await outside.evaluate(() => ({
+    bar: document.querySelector('[data-bar]')?.textContent ?? '',
     caption: document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '',
     lead: document.querySelector('[data-see-folder]')?.textContent ?? '',
   }));
-  expect(outsideSeen.caption.startsWith('IMG_0001.jpg') && outsideSeen.caption.includes('DCIM') && !outsideSeen.caption.includes(' × '), `caption ${outsideSeen.caption}`);
+  expect(outsideSeen.bar.startsWith('IMG_0001.jpg') && outsideSeen.caption.includes('DCIM') && !outsideSeen.caption.includes(' × '), `bar ${outsideSeen.bar}, caption ${outsideSeen.caption}`);
   expect(outsideSeen.lead === 'Open Pinboard', `lead “${outsideSeen.lead}”`);
   await outside.close();
 });
