@@ -62,6 +62,7 @@ const mock = (lib, opened) => {
   answers['plugin:event|listen'] = (args) => (listeners.push(args), listeners.length);
   window.__emit = (event) => listeners.filter((l) => l.event === event).forEach((l) => callbacks.get(l.handler)?.({ event, id: 0, payload: null }));
   window.__TAURI_INTERNALS__ = {
+    metadata: { currentWindow: { label: 'main' }, currentWebview: { windowLabel: 'main', label: 'main' } },
     invoke: async (cmd, args) => (window.__calls.push([cmd, args]), answers[cmd] ? answers[cmd](args) : null),
     convertFileSrc: (id) => `http://127.0.0.1:1431/thumb/${encodeURIComponent(id)}`,
     transformCallback: (fn) => {
@@ -75,6 +76,8 @@ const mock = (lib, opened) => {
 };
 const page = await browser.newPage();
 await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 2 });
+// The Mac in dark mode (Pinboard's appearance is Auto unless Settings says otherwise).
+await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
 await page.evaluateOnNewDocument(mock, library);
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
@@ -96,6 +99,9 @@ const check = async (name, fn) => {
   } catch (e) {
     results.push(`FAIL  ${name}: ${e.message}`);
   }
+  // Pages a check opened are closed even when it fails, so the main page is in front again.
+  for (const other of await browser.pages()) if (other !== page) await other.close().catch(() => {});
+  await page.bringToFront().catch(() => {});
 };
 const expect = (ok, msg) => {
   if (!ok) throw new Error(msg);
@@ -548,44 +554,96 @@ await check('small cards keep only what fits: icon buttons, no folder line on sh
   await wait(500);
 });
 
-await check('a picture opened from Finder shows in the viewer, among the others in its folder', async () => {
-  // A picture in a folder with a few others.
+await check('a picture opened from Finder shows on its own (no sidebar); See folder opens Pinboard there; closing puts the window away', async () => {
+  // A picture in a folder with a few others, opened by a double-click that launched Pinboard.
   const counts = tally((p) => p.folder);
   const folder = counts.find((f) => f && photos.filter((p) => p.folder === f).length >= 3);
   const inFolder = photos.filter((p) => p.folder === folder);
   const target = inFolder[1];
   const finder = await browser.newPage();
   await finder.setViewport({ width: 1320, height: 860 });
-  await finder.evaluateOnNewDocument(mock, library, { ids: [target.id], extra: [] });
+  await finder.evaluateOnNewDocument(mock, library, { ids: [target.id], extra: [], cold: true });
   await finder.goto('http://localhost:1430', { waitUntil: 'networkidle0' });
   await wait(1300);
-  const seen = await finder.evaluate(() => ({
-    title: document.querySelector('main header h1')?.textContent,
-    counter: [...document.querySelectorAll('[role="dialog"] span')].map((s) => s.textContent ?? '').find((t) => / of /.test(t)) ?? '',
-    caption: document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '',
-  }));
+  const look = () =>
+    finder.evaluate(() => {
+      const lead = document.querySelector('[data-see-folder]')?.getBoundingClientRect();
+      return {
+        sidebar: document.querySelector('aside')?.parentElement?.getBoundingClientRect().width,
+        title: document.querySelector('main header h1')?.textContent,
+        counter: [...document.querySelectorAll('[role="dialog"] span')].map((s) => s.textContent ?? '').find((t) => / of /.test(t)) ?? '',
+        caption: document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '',
+        lead: document.querySelector('[data-see-folder]')?.textContent ?? '',
+        leadMiddle: lead ? lead.top + lead.height / 2 : 0,
+        viewer: !!document.querySelector('[role="dialog"][aria-modal]'),
+      };
+    });
+  let seen = await look();
+  expect(seen.sidebar === 0, `sidebar ${seen.sidebar}px wide, want none`);
   expect(seen.counter === `2 of ${inFolder.length.toLocaleString()}`, `counter ${seen.counter}, want 2 of ${inFolder.length}`);
   expect(seen.caption.startsWith(target.name), `caption ${seen.caption}`);
-  expect(seen.title === folder.split('/').pop(), `behind it: ${seen.title}, want ${folder}`);
+  expect(seen.lead === 'See folder in Pinboard', `lead “${seen.lead}”`);
+  expect(Math.abs(seen.leadMiddle - 32) <= 2, `See folder sits at ${seen.leadMiddle}px, the traffic lights at ~32px`);
   await finder.screenshot({ path: join(OUT, 'opened-from-finder.png') });
-  // Another picture opened while the viewer is up starts the viewer again on that one.
+
+  // Another picture opened while it's up starts the viewer again on that one.
   const next = inFolder[2];
-  await finder.evaluate((id) => (window.__opened = { ids: [id], extra: [] }), next.id);
+  await finder.evaluate((id) => (window.__opened = { ids: [id], extra: [], cold: false }), next.id);
   await finder.evaluate(() => window.__emit?.('opened'));
   await wait(900);
-  const again = await finder.evaluate(() => document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '');
-  expect(again.startsWith(next.name), `after a second open: ${again}`);
+  seen = await look();
+  expect(seen.caption.startsWith(next.name) && seen.sidebar === 0, `after a second open: ${seen.caption}, sidebar ${seen.sidebar}`);
+
+  // See folder in Pinboard: the whole app, at that folder, with the picture on screen.
+  await finder.click('[data-see-folder]');
+  await wait(1300);
+  seen = await look();
+  expect(!seen.viewer && seen.sidebar === 272, `viewer ${seen.viewer}, sidebar ${seen.sidebar}`);
+  expect(seen.title === folder.split('/').pop(), `title ${seen.title}, want ${folder}`);
+  const spot = await finder.evaluate((id) => {
+    const card = document.querySelector(`[data-photo="${id}"]`);
+    const r = card?.getBoundingClientRect();
+    return { there: !!card, top: r && Math.round(r.top), bottom: r && Math.round(r.bottom), cards: document.querySelectorAll('[data-photo]').length, height: innerHeight };
+  }, next.id);
+  expect(spot.there && spot.top >= 0 && spot.bottom <= spot.height, `the picture is not on screen in its folder: ${JSON.stringify(spot)}`);
+  await finder.screenshot({ path: join(OUT, 'see-folder.png') });
+
+  // Opened again while Pinboard is in use: closing goes back to it, the window stays.
+  await finder.evaluate((id) => (window.__opened = { ids: [id], extra: [], cold: false }), target.id);
+  await finder.evaluate(() => window.__emit?.('opened'));
+  await wait(900);
+  expect((await look()).sidebar === 0, 'not on its own the second time');
+  await finder.keyboard.press('Escape');
+  await wait(1400);
+  seen = await look();
+  const hid = await finder.evaluate(() => window.__calls.some((c) => c[0] === 'hide_window'));
+  expect(!seen.viewer && seen.sidebar === 272 && seen.title === folder.split('/').pop() && !hid, `after closing: ${JSON.stringify(seen)}, hid ${hid}`);
   await finder.close();
+
+  // Launched for a picture: closing it puts the window away, like Preview.
+  const cold = await browser.newPage();
+  await cold.setViewport({ width: 1320, height: 860 });
+  await cold.evaluateOnNewDocument(mock, library, { ids: [target.id], extra: [], cold: true });
+  await cold.goto('http://localhost:1430', { waitUntil: 'networkidle0' });
+  await wait(1300);
+  await cold.keyboard.press('Escape');
+  await wait(900);
+  expect(await cold.evaluate(() => window.__calls.some((c) => c[0] === 'hide_window')), 'the window was not put away');
+  await cold.close();
 
   // One the scan doesn't list (on a memory card, say) still opens, from the record Pinboard made.
   const card = { ...photos[0], id: 'ffffffffffffff01', path: '/Volumes/Card/DCIM/IMG_0001.jpg', name: 'IMG_0001.jpg', folder: '/Volumes/Card/DCIM', approx: true };
   const outside = await browser.newPage();
   await outside.setViewport({ width: 1320, height: 860 });
-  await outside.evaluateOnNewDocument(mock, library, { ids: [card.id], extra: [card] });
+  await outside.evaluateOnNewDocument(mock, library, { ids: [card.id], extra: [card], cold: true });
   await outside.goto('http://localhost:1430', { waitUntil: 'networkidle0' });
   await wait(1300);
-  const caption = await outside.evaluate(() => document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '');
-  expect(caption.startsWith('IMG_0001.jpg') && caption.includes('DCIM') && !caption.includes(' × '), `caption ${caption}`);
+  const outsideSeen = await outside.evaluate(() => ({
+    caption: document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '',
+    lead: document.querySelector('[data-see-folder]')?.textContent ?? '',
+  }));
+  expect(outsideSeen.caption.startsWith('IMG_0001.jpg') && outsideSeen.caption.includes('DCIM') && !outsideSeen.caption.includes(' × '), `caption ${outsideSeen.caption}`);
+  expect(outsideSeen.lead === 'Open Pinboard', `lead “${outsideSeen.lead}”`);
   await outside.close();
 });
 
@@ -603,6 +661,53 @@ await check('Settings can make Pinboard the app pictures open in from Finder', a
   await wait(400);
   await clickText('aside nav button', 'All Photos');
   await wait(300);
+});
+
+await check('Light, Dark and Auto: the whole app follows, the photo viewer stays dark', async () => {
+  const dark = await page.evaluate(() => ({ cls: document.documentElement.className, panel: getComputedStyle(document.querySelector('main')).backgroundColor }));
+  expect(dark.cls.includes('dark') && dark.panel === 'rgb(0, 0, 0)', `dark: ${JSON.stringify(dark)}`);
+
+  // The Mac in light mode, Pinboard on Auto.
+  const light = await browser.newPage();
+  await light.setViewport({ width: 1320, height: 860, deviceScaleFactor: 2 });
+  await light.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+  await light.evaluateOnNewDocument(mock, library);
+  await light.evaluateOnNewDocument(() => addEventListener('DOMContentLoaded', () => (document.documentElement.style.background = 'linear-gradient(160deg,#eef0f4,#d6dbe3)')));
+  await light.goto('http://localhost:1430', { waitUntil: 'networkidle0' });
+  await wait(1400);
+  const seen = await light.evaluate(() => ({
+    cls: document.documentElement.className,
+    panel: getComputedStyle(document.querySelector('main')).backgroundColor,
+    title: getComputedStyle(document.querySelector('main header h1')).color,
+    nav: getComputedStyle(document.querySelector('aside nav button span')).color,
+  }));
+  expect(seen.cls.includes('light') && seen.panel === 'rgb(255, 255, 255)' && seen.title === 'rgb(17, 17, 19)', `light: ${JSON.stringify(seen)}`);
+  await light.screenshot({ path: join(OUT, 'light.png') });
+
+  // The viewer stays dark.
+  await (await light.$('[data-photo] > button:not([data-tick])')).click();
+  await wait(1000);
+  const viewer = await light.$eval('[role="dialog"][aria-modal] > div', (d) => getComputedStyle(d).backgroundColor);
+  expect(viewer.startsWith('rgba(6, 6, 7'), `viewer ${viewer}`);
+  await light.screenshot({ path: join(OUT, 'light-viewer.png') });
+  await light.keyboard.press('Escape');
+  await wait(700);
+
+  // Settings, in light; choosing Dark there switches at once.
+  const press = async (sel, label) => {
+    for (const el of await light.$$(sel)) if ((await el.evaluate((e) => e.textContent?.trim() ?? '')).startsWith(label)) return void (await el.click());
+    throw new Error(`no ${sel} with “${label}”`);
+  };
+  await press('aside button', 'Settings');
+  await wait(500);
+  await light.screenshot({ path: join(OUT, 'light-settings.png') });
+  await press('main [role="radio"]', 'Dark');
+  await wait(400);
+  const after = await light.evaluate(() => ({ cls: document.documentElement.className, panel: getComputedStyle(document.querySelector('main')).backgroundColor, saved: JSON.parse(localStorage.getItem('settings')).theme }));
+  expect(after.cls.includes('dark') && after.panel === 'rgb(0, 0, 0)' && after.saved === 'dark', `after choosing Dark: ${JSON.stringify(after)}`);
+  const asked = await light.evaluate(() => window.__calls.some((c) => c[0] === 'plugin:window|set_theme' && c[1]?.value === 'dark'));
+  expect(asked, 'the window itself was not set to dark');
+  await light.close();
 });
 
 await check('a folder macOS keeps closed gets a notice with a way to open it', async () => {

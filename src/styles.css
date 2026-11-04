@@ -3,6 +3,47 @@
 @import '@basedraft/ui/theme.css';
 @source '../node_modules/@basedraft/ui/dist';
 
+/* Pinboard's own colors, in light and dark. `ink` is the color of text and of the faint lines and
+   fills made from it (ink/5, ink/50…); `panel` is the raised panel the photos sit on, `well` the
+   area inside it, `tile` a card before its photo loads, `float` a floating panel (search, tips),
+   `scrim` what dims the window behind one. Inline, so a part of the page can set its own (the
+   photo viewer is always dark). */
+@theme inline {
+  --color-ink: var(--pb-ink);
+  --color-panel: var(--pb-panel);
+  --color-well: var(--pb-well);
+  --color-tile: var(--pb-tile);
+  --color-float: var(--pb-float);
+  --color-scrim: var(--pb-scrim);
+}
+
+:root,
+.light,
+[data-theme='light'] {
+  --pb-ink: #111113;
+  --pb-panel: #ffffff;
+  --pb-well: #f3f3f5;
+  --pb-tile: #e6e6ea;
+  --pb-float: rgb(252 252 253 / 0.86);
+  --pb-scrim: rgb(0 0 0 / 0.16);
+  --pb-panel-shadow: 0 10px 34px -14px rgb(0 0 0 / 0.25), 0 1px 2px rgb(0 0 0 / 0.05);
+  --pb-float-shadow: 0 30px 80px -24px rgb(0 0 0 / 0.35), 0 0 0 0.5px rgb(0 0 0 / 0.08);
+  --pb-scrollbar: rgb(0 0 0 / 0.18);
+}
+
+.dark,
+[data-theme='dark'] {
+  --pb-ink: #ffffff;
+  --pb-panel: #000000;
+  --pb-well: #0e0e10;
+  --pb-tile: #18181b;
+  --pb-float: rgb(22 22 25 / 0.8);
+  --pb-scrim: rgb(0 0 0 / 0.4);
+  --pb-panel-shadow: 0 12px 40px -12px rgb(0 0 0 / 0.7);
+  --pb-float-shadow: 0 40px 100px -24px rgb(0 0 0 / 0.85), inset 0 1px 0 rgb(255 255 255 / 0.06);
+  --pb-scrollbar: rgb(255 255 255 / 0.14);
+}
+
 /* Near-black, like a darkroom: the photos are the only color on screen. Unlayered, so it wins
    over basedraft's own dark values, including inside its dark overlays. */
 .dark,
@@ -114,5 +155,5 @@ body:has([role='toolbar'][aria-label^='Ticked photos']) [data-bd-toaster] {
 
 .scroll-thin {
   scrollbar-width: thin;
-  scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+  scrollbar-color: var(--pb-scrollbar) transparent;
 }

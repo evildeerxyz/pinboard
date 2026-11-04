@@ -51,8 +51,9 @@ import { Search } from './components/Search';
 import { SettingsPage } from './components/SettingsPage';
 import { Tip } from './components/Tip';
 import { COLUMN_WIDTH, RESCAN_AFTER, useSettings } from './lib/settings';
+import { useTheme } from './lib/theme';
 import { Sidebar, type NavItem } from './components/Sidebar';
-import { copyPhoto, copyPhotos, openPhoto, openPhotos, openPrivacySettings, putBack, reveal, revealPhotos, scanLibrary, takeOpened, thumbUrl, trashPhotos, type Photo } from './lib/api';
+import { copyPhoto, copyPhotos, hideWindow, openPhoto, openPhotos, openPrivacySettings, putBack, reveal, revealPhotos, scanLibrary, takeOpened, thumbUrl, trashPhotos, type Photo } from './lib/api';
 import { APP_NAME } from './lib/brand';
 import { CATEGORIES, FILTERS, FILTER_GROUPS, classify, pictures, dateOf, flattenFolders, folderTree, inFolder, matches, sizeOf, type CategoryId, type Indexed } from './lib/library';
 
@@ -141,6 +142,12 @@ export function App() {
   /** The viewer: what it shows and where it starts. `key` is new for each picture opened from Finder,
    * so a viewer that's already open starts again on it rather than staying where it was. */
   const [viewer, setViewer] = useState<{ list: Indexed[]; start: number; key?: number } | null>(null);
+  /** Showing a picture opened from Finder on its own, with no sidebar, the way Preview would. `back`
+   * is where closing it goes: back to Pinboard as it was, or (if Pinboard was opened just for this
+   * picture) putting the window away. */
+  const [finder, setFinder] = useState<{ back: 'hide' | 'pinboard' } | null>(null);
+  /** A photo for the grid to point out (after "See folder in Pinboard"). */
+  const [pointAt, setPointAt] = useState<{ id: string; tick: number } | null>(null);
   const [palette, setPalette] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   /** Full screen hides the traffic lights, so the app's icon takes their place. */
@@ -149,6 +156,7 @@ export function App() {
   const [, tick] = useState(0);
   const [settings, update, reset] = useSettings();
   /** The latest settings, for a scan started from anywhere. */
+  useTheme(settings.theme);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const search = useRef<HTMLInputElement>(null);
@@ -311,6 +319,8 @@ export function App() {
   const goRef = useRef<(id: string) => void>(() => {});
   const go = useCallback((id: string) => {
     setViewer(null);
+    setFinder(null);
+    setPointAt(null);
     setActive(id);
     setFilters([]);
     setQuery('');
@@ -321,21 +331,38 @@ export function App() {
 
   useEffect(() => scroller.current?.scrollTo({ top: 0 }), [query, filters]);
 
-  // Pictures opened from Finder (a double-click, Open With) go straight to the viewer: one picture
-  // among the others in its folder, which the grid shows behind it; several, just those. They can
-  // arrive before the library has loaded, so they wait for it.
+  // Pictures opened from Finder (a double-click, Open With) open on their own: the viewer fills the
+  // window, with no sidebar. One picture comes with the others in its folder; several, just those.
+  // "See folder in Pinboard" goes on into the whole app. They can arrive before the library has
+  // loaded, so they wait for it (the sidebar goes at once, so it doesn't flash).
   const [opened, setOpened] = useState<{ ids: string[]; extra: Photo[] } | null>(null);
+  const finderRef = useRef(finder);
+  finderRef.current = finder;
+  /** The window was put away by closing a picture from Finder: the next one is on its own again. */
+  const putAway = useRef(false);
+  /** The picture on screen in the viewer, for "See folder in Pinboard". */
+  const onScreen = useRef<Indexed | null>(null);
   useEffect(() => {
     const take = () =>
       void takeOpened()
-        .then((got) => got.ids.length && setOpened((now) => (now ? { ids: [...now.ids, ...got.ids], extra: [...now.extra, ...got.extra] } : got)))
+        .then((got) => {
+          if (!got.ids.length) return;
+          const back = got.cold || putAway.current ? 'hide' : (finderRef.current?.back ?? 'pinboard');
+          putAway.current = false;
+          setFinder({ back });
+          setOpened((now) => (now ? { ids: [...now.ids, ...got.ids], extra: [...now.extra, ...got.extra] } : got));
+        })
         .catch(() => {});
     take();
-    let off: (() => void) | undefined;
+    const offs: Array<() => void> = [];
     void listen('opened', take)
-      .then((un) => (off = un))
+      .then((un) => offs.push(un))
       .catch(() => {});
-    return () => off?.();
+    // The Dock icon brought the window back: it shows Pinboard itself.
+    void listen('reopened', () => (putAway.current = false))
+      .then((un) => offs.push(un))
+      .catch(() => {});
+    return () => offs.forEach((off) => off());
   }, []);
   useEffect(() => {
     if (!opened || !photos) return;
@@ -344,16 +371,32 @@ export function App() {
     const extra = classify(opened.extra.filter((p) => !byId.has(p.id)));
     for (const p of extra) byId.set(p.id, p);
     const picked = [...new Set(opened.ids)].map((id) => byId.get(id)).filter((p): p is Indexed => !!p);
-    if (!picked.length) return;
+    if (!picked.length) return setFinder(null);
     const one = picked.length === 1 ? picked[0] : null;
-    if (one && !extra.includes(one)) {
-      const list = photos.filter((p) => p.folder === one.folder);
-      go(one.folder ? `folder:${one.folder}` : 'all');
-      setViewer({ list, start: Math.max(0, list.indexOf(one)), key: Date.now() });
-    } else {
-      setViewer({ list: picked, start: 0, key: Date.now() });
+    const list = one && !extra.includes(one) ? photos.filter((p) => p.folder === one.folder) : picked;
+    const start = one ? Math.max(0, list.indexOf(one)) : 0;
+    onScreen.current = list[start] ?? null;
+    setViewer({ list, start, key: Date.now() });
+  }, [opened, photos]);
+
+  /** Closing a picture opened from Finder: back to Pinboard as it was, or put the window away. */
+  const closeFinder = useCallback(() => {
+    const back = finderRef.current?.back;
+    setFinder(null);
+    setViewer(null);
+    if (back === 'hide') {
+      putAway.current = true;
+      void hideWindow().catch(() => {});
     }
-  }, [opened, photos, go]);
+  }, []);
+  /** "See folder in Pinboard": the whole app, at the picture's folder, with the picture pointed out. */
+  const libraryIds = useMemo(() => new Set((photos ?? []).map((p) => p.id)), [photos]);
+  const seeFolder = useCallback(() => {
+    const p = onScreen.current;
+    const known = !!p && libraryIds.has(p.id);
+    go(known && p.folder ? `folder:${p.folder}` : 'all');
+    setPointAt(known ? { id: p.id, tick: Date.now() } : null);
+  }, [libraryIds, go]);
   // A new view, a new search or new filters start with nothing ticked.
   useEffect(() => {
     setSelected(new Set());
@@ -514,6 +557,9 @@ export function App() {
     );
   };
 
+  /** The sidebar is away when you fold it, and while a picture from Finder is shown on its own. */
+  const folded = collapsed || !!finder;
+
   /* ---------- the page ---------- */
 
   let body: ReactNode;
@@ -545,7 +591,7 @@ export function App() {
       />
     );
   } else {
-    body = <Masonry key={viewKey} photos={shown} favorites={favorites} selected={selected} actions={actions} column={COLUMN_WIDTH[settings.cardSize]} hoverActions={settings.hoverActions} />;
+    body = <Masonry key={viewKey} photos={shown} favorites={favorites} selected={selected} actions={actions} column={COLUMN_WIDTH[settings.cardSize]} hoverActions={settings.hoverActions} focus={pointAt} />;
   }
 
   return (
@@ -553,11 +599,11 @@ export function App() {
       {/* The sidebar stays on the page and only slides to nothing, so bringing it back costs no rebuild. */}
       <motion.div
         initial={false}
-        animate={{ width: collapsed ? 0 : 272, opacity: collapsed ? 0 : 1 }}
-        transition={{ width: FOLD, opacity: { duration: 0.18 } }}
+        animate={{ width: folded ? 0 : 272, opacity: folded ? 0 : 1 }}
+        transition={finder ? { duration: 0 } : { width: FOLD, opacity: { duration: 0.18 } }}
         className="h-full shrink-0 overflow-hidden"
-        inert={collapsed}
-        aria-hidden={collapsed || undefined}
+        inert={folded}
+        aria-hidden={folded || undefined}
       >
         <Sidebar
           appName={APP_NAME}
@@ -578,11 +624,11 @@ export function App() {
       <motion.main
         ref={panel}
         initial={false}
-        animate={{ marginLeft: collapsed ? 5 : 0 }}
-        transition={FOLD}
-        className="relative my-[5px] mr-[5px] flex min-w-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-white/[0.08] bg-black shadow-[0_12px_40px_-12px_rgb(0_0_0/0.7)]"
+        animate={{ marginLeft: folded ? 5 : 0 }}
+        transition={finder ? { duration: 0 } : FOLD}
+        className="relative my-[5px] mr-[5px] flex min-w-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-ink/[0.08] bg-panel shadow-[var(--pb-panel-shadow)]"
       >
-        <motion.header data-tauri-drag-region initial={false} animate={{ paddingLeft: collapsed && !fullscreen ? 86 : 22 }} transition={FOLD} className="flex h-[54px] shrink-0 items-center gap-3 border-b border-white/[0.07] pr-6">
+        <motion.header data-tauri-drag-region initial={false} animate={{ paddingLeft: folded && !fullscreen ? 86 : 22 }} transition={finder ? { duration: 0 } : FOLD} className="flex h-[54px] shrink-0 items-center gap-3 border-b border-ink/[0.07] pr-6">
           {/* The sidebar's one switch, always here in the body, just left of the title. */}
           <Tip content={collapsed ? 'Show sidebar' : 'Hide sidebar'} keys={['⌘', '\\']}>
             <button
@@ -590,22 +636,22 @@ export function App() {
               onClick={() => setCollapsed((c) => !c)}
               aria-label={collapsed ? 'Show sidebar' : 'Hide sidebar'}
               aria-pressed={!collapsed}
-              className="-ml-1.5 grid size-8 shrink-0 place-items-center rounded-lg text-white/50 transition-colors hover:bg-white/[0.06] hover:text-white"
+              className="-ml-1.5 grid size-8 shrink-0 place-items-center rounded-lg text-ink/50 transition-colors hover:bg-ink/[0.06] hover:text-ink"
             >
               <SidebarSimpleIcon className="size-[19px]" />
             </button>
           </Tip>
           <AnimatePresence mode="popLayout" initial={false}>
-            <motion.h1 key={title} data-tauri-drag-region initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }} className="font-display truncate text-[21px] text-[#f4f4f5]">
+            <motion.h1 key={title} data-tauri-drag-region initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }} className="font-display truncate text-[21px] text-ink">
               {title}
             </motion.h1>
           </AnimatePresence>
-          <span data-tauri-drag-region data-count className="min-w-0 truncate text-[13px] tabular-nums text-[#6b6b70]">
+          <span data-tauri-drag-region data-count className="min-w-0 truncate text-[13px] tabular-nums text-ink/45">
             {onSettings ? null : [parent, photos ? pictures(shown.length) : null].filter(Boolean).join('  ·  ')}
           </span>
         </motion.header>
 
-        <div ref={scroller} className="scroll-thin min-h-0 flex-1 overflow-y-auto px-6 pt-6">
+        <div ref={scroller} data-scroller className="scroll-thin min-h-0 flex-1 overflow-y-auto px-6 pt-6">
           {blocked.length > 0 && !blockedNoted && (
             <Alert
               tone="warn"
@@ -642,8 +688,8 @@ export function App() {
             <>
           {/* A quiet field, like the reference's "Type a mood…" (⌘F finds it), and the Filter menu beside it. */}
           <div className="flex items-center gap-2">
-          <label className="flex h-[44px] min-w-0 flex-1 items-center gap-3 rounded-[12px] border border-white/[0.08] bg-white/[0.025] px-4 transition-colors focus-within:border-white/[0.16] focus-within:bg-white/[0.04]">
-            <MagnifyingGlassIcon className="size-[17px] shrink-0 text-white/40" />
+          <label className="flex h-[44px] min-w-0 flex-1 items-center gap-3 rounded-[12px] border border-ink/[0.08] bg-ink/[0.025] px-4 transition-colors focus-within:border-ink/[0.16] focus-within:bg-ink/[0.04]">
+            <MagnifyingGlassIcon className="size-[17px] shrink-0 text-ink/40" />
             <input
               ref={search}
               value={query}
@@ -654,7 +700,7 @@ export function App() {
               placeholder={folder ? `Search ${title}` : 'Search by name, folder or month'}
               aria-label="Search pictures"
               spellCheck={false}
-              className="min-w-0 flex-1 bg-transparent text-[14.5px] text-[#f4f4f5] outline-none placeholder:text-white/35"
+              className="min-w-0 flex-1 bg-transparent text-[14.5px] text-ink outline-none placeholder:text-ink/35"
             />
             <AnimatePresence initial={false}>
               {query && (
@@ -667,7 +713,7 @@ export function App() {
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.6 }}
                   transition={{ duration: 0.15 }}
-                  className="grid size-5 place-items-center rounded-full bg-white/15 text-white/80 hover:bg-white/25"
+                  className="grid size-5 place-items-center rounded-full bg-ink/15 text-ink/80 hover:bg-ink/25"
                 >
                   <XIcon weight="bold" className="size-2.5" />
                 </motion.button>
@@ -677,10 +723,13 @@ export function App() {
           <FilterMenu groups={photos ? filterGroups : []} value={filters} onValueChange={setFilters} />
           </div>
 
-          <div className="mt-5 min-h-[calc(100%-70px)] rounded-t-[22px] bg-[#0e0e10] p-3.5 pb-16">{body}</div>
+          <div className="mt-5 min-h-[calc(100%-70px)] rounded-t-[22px] bg-well p-3.5 pb-16">{body}</div>
             </>
           )}
         </div>
+        {/* A picture from Finder on its way (the library still loading): dark, like the viewer. */}
+        {finder && !viewer && <div aria-hidden className="absolute inset-0 z-20 bg-[rgb(6_6_7)]" />}
+
         {/* What's ticked, and what to do with it, floating at the foot of the panel. */}
         <ActionBar count={onSettings ? 0 : picked.length} onClear={() => setSelected(new Set())} label="Ticked photos" position="absolute" className="bottom-5">
           <ActionBarButton
@@ -754,8 +803,29 @@ export function App() {
           container={panel}
           filmstrip={settings.filmstrip}
           tileFor={(i) => document.querySelector<HTMLElement>(`[data-photo="${viewer.list[i]?.id}"]`)}
-          onClose={() => setViewer(null)}
+          onClose={finder ? closeFinder : () => setViewer(null)}
+          onIndex={(i) => (onScreen.current = viewer.list[i] ?? null)}
           actions={viewerActions}
+          backdropCloses={!finder}
+          // On its own (from Finder), the row of buttons lines up with the traffic lights, and a way
+          // into the rest of Pinboard sits beside them.
+          barTop={finder && !fullscreen ? 7 : 16}
+          leadInset={fullscreen ? 16 : 84}
+          lead={
+            finder
+              ? (i) => (
+                  <button
+                    type="button"
+                    data-see-folder
+                    onClick={seeFolder}
+                    className="flex h-10 items-center gap-2 rounded-full bg-white/10 pl-3.5 pr-4 text-[13.5px] font-medium text-white outline-none backdrop-blur-xl transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white"
+                  >
+                    <SidebarSimpleIcon className="size-[17px]" />
+                    {viewer.list[i] && libraryIds.has(viewer.list[i].id) ? 'See folder in Pinboard' : 'Open Pinboard'}
+                  </button>
+                )
+              : undefined
+          }
         />
       )}
 

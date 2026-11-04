@@ -1,6 +1,6 @@
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Skeleton } from '@basedraft/ui';
 import { ArrowSquareOutIcon, CheckCircleIcon, CheckIcon, CopyIcon, FolderOpenIcon, FolderSimpleIcon, HeartIcon, TrashIcon } from '@phosphor-icons/react';
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { thumbUrl } from '../lib/api';
 import type { Indexed } from '../lib/library';
 import { PlaceSquare } from './Sidebar';
@@ -44,6 +44,7 @@ export function Masonry({
   actions,
   column = 250,
   hoverActions = true,
+  focus,
 }: {
   photos: Indexed[];
   favorites: Set<string>;
@@ -54,6 +55,9 @@ export function Masonry({
   column?: number;
   /** Like and Show on a card when you point at it. */
   hoverActions?: boolean;
+  /** A photo to point out: the grid goes down to it (adding cards if it's further than the first
+   * page), centers it, and rings it for a moment. A new `tick` points again. */
+  focus?: { id: string; tick: number } | null;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const end = useRef<HTMLDivElement>(null);
@@ -61,8 +65,27 @@ export function Masonry({
   const [dealt, setDealt] = useState(0);
   const dealtRef = useRef(0);
   const [shown, setShown] = useState(PAGE);
+  const [focusing, setFocusing] = useState<string | null>(null);
   /** The column width last dealt for: a new card size glides the cards too. */
   const columnRef = useRef(column);
+  /** Where each card goes, as last dealt. */
+  const placesRef = useRef<Place[]>([]);
+  /** A photo being pointed out stays in the middle while the grid settles (the sidebar sliding in
+   * deals the columns again), until `until`. */
+  const pin = useRef<{ index: number; until: number } | null>(null);
+  const center = useCallback(() => {
+    const el = box.current;
+    const pinned = pin.current;
+    if (!el || !pinned) return;
+    if (performance.now() > pinned.until) return void (pin.current = null);
+    const place = placesRef.current[pinned.index];
+    const scroller = el.closest<HTMLElement>('[data-scroller]');
+    if (!place || !scroller) return;
+    // Where it ends up (not where it is mid-glide), scaled as the grid is right now.
+    const s = Number(el.style.getPropertyValue('--s')) || 1;
+    const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    scroller.scrollTop = top + (place.y + place.h / 2) * s - scroller.clientHeight / 2;
+  }, []);
 
   useLayoutEffect(() => {
     const el = box.current;
@@ -73,6 +96,7 @@ export function Masonry({
     const ro = new ResizeObserver(([e]) => {
       const w = e.contentRect.width;
       if (dealtRef.current) el.style.setProperty('--s', String(w / dealtRef.current));
+      center();
       clearTimeout(settle);
       settle = window.setTimeout(() => {
         if (Math.abs(w - dealtRef.current) < 1) return;
@@ -113,6 +137,29 @@ export function Masonry({
       c.style.top = `calc(${p.y}px * var(--s, 1))`;
       c.style.height = `calc(${p.h}px * var(--s, 1))`;
     });
+    placesRef.current = places;
+    center();
+  });
+
+  useEffect(() => {
+    if (!focus) return;
+    const at = photos.findIndex((p) => p.id === focus.id);
+    if (at < 0) return;
+    setShown((n) => Math.max(n, at + 40));
+    setFocusing(focus.id);
+  }, [focus?.tick]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Once its card is placed: straight to it (and kept there while the grid settles), then a ring
+  // that fades.
+  useEffect(() => {
+    if (!focusing) return;
+    const index = photos.findIndex((p) => p.id === focusing);
+    const card = box.current?.children[index] as HTMLElement | undefined;
+    if (!card?.style.top) return;
+    setFocusing(null);
+    pin.current = { index, until: performance.now() + 1800 };
+    center();
+    card.animate([{ boxShadow: '0 0 0 3px #4f8df7' }, { boxShadow: '0 0 0 3px #4f8df7', offset: 0.65 }, { boxShadow: '0 0 0 3px rgb(79 141 247 / 0)' }], { duration: 1900, easing: 'ease-out' });
   });
 
   useEffect(() => {
@@ -200,7 +247,7 @@ const Card = memo(function Card({
       <ContextMenuTrigger
         data-photo={photo.id}
         data-picked={picked || undefined}
-        className="card-in group/card absolute overflow-hidden rounded-[12px] bg-[#18181b]"
+        className="card-in group/card absolute overflow-hidden rounded-[12px] bg-tile"
         style={{ animationDelay: `${delay}ms` }}
       >
         <button
@@ -222,7 +269,7 @@ const Card = memo(function Card({
               style={{ opacity: loaded ? 1 : 0 }}
             />
           ) : (
-            <span className="grid size-full place-items-center px-3 text-center text-xs text-[#71717a]">{photo.name}</span>
+            <span className="grid size-full place-items-center px-3 text-center text-xs text-ink/45">{photo.name}</span>
           )}
         </button>
 

@@ -77,6 +77,10 @@ export function PhotoViewer({
   onClose,
   actions,
   filmstrip = true,
+  lead,
+  leadInset = 16,
+  backdropCloses = true,
+  barTop = 16,
 }: {
   photos: ViewerPhoto[];
   start: number;
@@ -90,6 +94,14 @@ export function PhotoViewer({
   actions?: (index: number) => ReactNode;
   /** The strip of nearby photos at the foot. */
   filmstrip?: boolean;
+  /** Something at the top left, level with the buttons (a way into the rest of the app). */
+  lead?: (index: number) => ReactNode;
+  /** How far in from the left it sits (past the window's traffic lights, when they're there). */
+  leadInset?: number;
+  /** Whether a click on the dark around the photo closes it. */
+  backdropCloses?: boolean;
+  /** Where the row of buttons at the top sits (to line up with the window's traffic lights). */
+  barTop?: number;
 }) {
   const still = useReducedMotion();
   const [i, setI] = useState(start);
@@ -199,7 +211,9 @@ export function PhotoViewer({
       className="dark fixed z-[120] overflow-hidden text-white"
       style={{ left: area.left, top: area.top, width: area.width, height: area.height, borderRadius: RADIUS }}
     >
-      <motion.div data-bd-ui="" aria-hidden className="absolute inset-0 bg-[rgb(6_6_7/0.94)] backdrop-blur-xl" initial={{ opacity: 0 }} animate={{ opacity: closing ? 0 : 1 }} transition={{ duration: closing ? 0.22 : 0.28 }} onClick={close} />
+      <motion.div data-bd-ui="" aria-hidden className="absolute inset-0 bg-[rgb(6_6_7/0.94)] backdrop-blur-xl" initial={{ opacity: 0 }} animate={{ opacity: closing ? 0 : 1 }} transition={{ duration: closing ? 0.22 : 0.28 }} onClick={backdropCloses ? close : undefined} />
+      {/* The empty top edge moves the window, as a title bar would. */}
+      <div data-bd-ui="" data-tauri-drag-region aria-hidden className="absolute inset-x-0 top-0 h-[72px]" />
       {/* Each picture in a frame of its own shape, where it fits. The next one fades in over the last
           where it sits (a breath of movement the way you're going), so neither is cut to the other's shape. */}
       <AnimatePresence initial={false} custom={dir}>
@@ -243,11 +257,16 @@ export function PhotoViewer({
       <motion.div data-bd-ui="" initial={{ opacity: 0 }} animate={{ opacity: closing ? 0 : 1 }} transition={{ duration: 0.2, delay: closing ? 0 : 0.12 }}>
         {/* Where you are, at the top, level with the buttons. */}
         {many && (
-          <span data-bd-ui="" className="absolute left-1/2 top-[22px] -translate-x-1/2 rounded-full bg-white/10 px-3.5 py-1.5 text-[13px] font-medium tabular-nums text-white/85 backdrop-blur-xl">
+          <span data-bd-ui="" style={{ top: barTop + 6 }} className="absolute left-1/2 -translate-x-1/2 rounded-full bg-white/10 px-3.5 py-1.5 text-[13px] font-medium tabular-nums text-white/85 backdrop-blur-xl">
             {(i + 1).toLocaleString()} of {photos.length.toLocaleString()}
           </span>
         )}
-        <div data-bd-ui="" className="absolute right-4 top-4 flex items-center gap-2">
+        {lead && (
+          <div data-bd-ui="" className="absolute flex items-center" style={{ left: leadInset, top: barTop }}>
+            {lead(i)}
+          </div>
+        )}
+        <div data-bd-ui="" className="absolute right-4 flex items-center gap-2" style={{ top: barTop }}>
           {actions?.(i)}
           <button data-bd-ui="" type="button" data-close aria-label="Close" onClick={close} className="grid size-10 place-items-center rounded-full bg-white/10 text-white outline-none backdrop-blur-xl transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white">
             <XIcon weight="regular" className="size-4" />

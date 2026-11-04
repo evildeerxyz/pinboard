@@ -128,7 +128,7 @@ export function Search({
       data-at={item.key === selected}
       onMouseMove={() => setAt(items.indexOf(item))}
       onClick={() => run(item)}
-      className={`${className} outline-none transition-colors duration-100 ${item.key === selected ? 'bg-white/[0.09]' : ''}`}
+      className={`${className} outline-none transition-colors duration-100 ${item.key === selected ? 'bg-ink/[0.09]' : ''}`}
     >
       {children}
     </button>
@@ -148,10 +148,10 @@ export function Search({
           return row(
             item,
             <>
-              <I className="size-[15px] text-white/60" />
+              <I className="size-[15px] text-ink/60" />
               {item.place.label}
             </>,
-            'flex h-[32px] items-center gap-2 rounded-full border border-white/[0.08] px-3 text-[13.5px] text-white/85 hover:text-white',
+            'flex h-[32px] items-center gap-2 rounded-full border border-ink/[0.08] px-3 text-[13.5px] text-ink/85 hover:text-ink',
           );
         })}
       </div>
@@ -165,7 +165,7 @@ export function Search({
           return row(
             item,
             <img src={thumbUrl(item.photo.id, 256)} alt="" loading="lazy" draggable={false} className="size-full rounded-[9px] object-cover" />,
-            `aspect-square overflow-hidden rounded-[11px] p-[3px] ${item.key === selected ? 'ring-2 ring-white/90' : ''}`,
+            `aspect-square overflow-hidden rounded-[11px] p-[3px] ${item.key === selected ? 'ring-2 ring-ink/90' : ''}`,
           );
         })}
       </div>
@@ -182,14 +182,14 @@ export function Search({
           return row(
             item,
             <>
-              <span className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-[9px] bg-white/[0.06]">
-                {cover ? <img src={thumbUrl(cover, 256)} alt="" loading="lazy" draggable={false} className="size-full object-cover" /> : <FolderSimpleIcon className="size-4 text-white/50" />}
+              <span className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-[9px] bg-ink/[0.06]">
+                {cover ? <img src={thumbUrl(cover, 256)} alt="" loading="lazy" draggable={false} className="size-full object-cover" /> : <FolderSimpleIcon className="size-4 text-ink/50" />}
               </span>
               <span className="min-w-0 flex-1 text-left">
-                <span className="block truncate text-[14px] text-white/90">{f.label}</span>
-                <span className="block truncate text-[12px] text-white/40">{parent}</span>
+                <span className="block truncate text-[14px] text-ink/90">{f.label}</span>
+                <span className="block truncate text-[12px] text-ink/40">{parent}</span>
               </span>
-              <span className="shrink-0 text-[12.5px] tabular-nums text-white/40">{count(f.count)}</span>
+              <span className="shrink-0 text-[12.5px] tabular-nums text-ink/40">{count(f.count)}</span>
             </>,
             'flex h-[52px] w-full items-center gap-3 rounded-[11px] px-2.5',
           );
@@ -204,7 +204,7 @@ export function Search({
     <AnimatePresence>
       {open && (
         <motion.div key="search" className="fixed inset-0 z-[110] flex justify-center pt-[11vh]" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }}>
-          <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden />
+          <div className="absolute inset-0 bg-scrim" onClick={onClose} aria-hidden />
           <motion.div
             role="dialog"
             aria-label="Search"
@@ -213,10 +213,10 @@ export function Search({
             exit={{ opacity: 0, y: -4, scale: 0.99, transition: { duration: 0.12 } }}
             transition={POP}
             onKeyDown={onKey}
-            className="relative flex max-h-[min(560px,76vh)] w-[min(640px,calc(100vw-48px))] flex-col overflow-hidden rounded-[18px] border border-white/[0.1] bg-[rgb(22_22_25/0.8)] shadow-[0_40px_100px_-24px_rgb(0_0_0/0.85),inset_0_1px_0_rgb(255_255_255/0.06)] backdrop-blur-2xl backdrop-saturate-150"
+            className="relative flex max-h-[min(560px,76vh)] w-[min(640px,calc(100vw-48px))] flex-col overflow-hidden rounded-[18px] border border-ink/[0.1] bg-float shadow-[var(--pb-float-shadow)] backdrop-blur-2xl backdrop-saturate-150"
           >
-            <div className="flex h-[58px] shrink-0 items-center gap-3 border-b border-white/[0.07] px-5">
-              <MagnifyingGlassIcon className="size-[19px] shrink-0 text-white/45" />
+            <div className="flex h-[58px] shrink-0 items-center gap-3 border-b border-ink/[0.07] px-5">
+              <MagnifyingGlassIcon className="size-[19px] shrink-0 text-ink/45" />
               <input
                 ref={input}
                 value={query}
@@ -224,21 +224,21 @@ export function Search({
                 placeholder="Search photos and folders"
                 aria-label="Search photos and folders"
                 spellCheck={false}
-                className="min-w-0 flex-1 bg-transparent text-[17px] text-white outline-none placeholder:text-white/35"
+                className="min-w-0 flex-1 bg-transparent text-[17px] text-ink outline-none placeholder:text-ink/35"
               />
-              <span className="shrink-0 rounded-md bg-white/[0.07] px-1.5 py-0.5 text-[11.5px] text-white/45">esc</span>
+              <span className="shrink-0 rounded-md bg-ink/[0.07] px-1.5 py-0.5 text-[11.5px] text-ink/45">esc</span>
             </div>
             <div ref={list} className="scroll-thin min-h-0 flex-1 overflow-y-auto pb-3">
               {items.length ? (
                 sections
               ) : (
                 <div className="px-6 py-12 text-center">
-                  <p className="text-[14.5px] text-white/80">Nothing matches “{query.trim()}”</p>
-                  <p className="mt-1 text-[13px] text-white/40">Try part of a file name, a folder, or a month like “october”.</p>
+                  <p className="text-[14.5px] text-ink/80">Nothing matches “{query.trim()}”</p>
+                  <p className="mt-1 text-[13px] text-ink/40">Try part of a file name, a folder, or a month like “october”.</p>
                 </div>
               )}
             </div>
-            <div className="flex h-[38px] shrink-0 items-center gap-4 border-t border-white/[0.07] px-5 text-[12px] text-white/40">
+            <div className="flex h-[38px] shrink-0 items-center gap-4 border-t border-ink/[0.07] px-5 text-[12px] text-ink/40">
               <span>
                 <Key>↑</Key>
                 <Key>↓</Key> move
@@ -258,9 +258,9 @@ export function Search({
 function Section({ title, aside, children }: { title: string; aside?: string; children: ReactNode }) {
   return (
     <section className="pt-3">
-      <h3 className="flex items-baseline justify-between px-5 pb-2 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-white/35">
+      <h3 className="flex items-baseline justify-between px-5 pb-2 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-ink/35">
         {title}
-        {aside && <span className="normal-case tracking-normal text-white/30">{aside}</span>}
+        {aside && <span className="normal-case tracking-normal text-ink/30">{aside}</span>}
       </h3>
       {children}
     </section>
@@ -268,5 +268,5 @@ function Section({ title, aside, children }: { title: string; aside?: string; ch
 }
 
 function Key({ children }: { children: ReactNode }) {
-  return <span className="mr-1 inline-grid min-w-[18px] place-items-center rounded-[5px] bg-white/[0.08] px-1 text-[11px] text-white/60">{children}</span>;
+  return <span className="mr-1 inline-grid min-w-[18px] place-items-center rounded-[5px] bg-ink/[0.08] px-1 text-[11px] text-ink/60">{children}</span>;
 }

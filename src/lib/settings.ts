@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import type { ThemeChoice } from './theme';
 
 /** Everything Settings changes, kept on this Mac. */
 export type Settings = {
@@ -20,6 +21,8 @@ export type Settings = {
   quality: 'fast' | 'sharp';
   /** When to look for new pictures on its own. */
   rescan: 'return' | 'hourly' | 'manual';
+  /** Light or dark, or Auto to follow the Mac. */
+  theme: ThemeChoice;
 };
 
 export const DEFAULTS: Settings = {
@@ -32,6 +35,7 @@ export const DEFAULTS: Settings = {
   filmstrip: true,
   quality: 'sharp',
   rescan: 'return',
+  theme: 'auto',
 };
 
 /** The width a column aims for, by card size. */
@@ -41,7 +45,7 @@ export const RESCAN_AFTER: Record<Settings['rescan'], number> = { return: 10 * 6
 
 const KEY = 'settings';
 
-function load(): Settings {
+export function loadSettings(): Settings {
   try {
     return { ...DEFAULTS, ...(JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Settings>) };
   } catch {
@@ -50,7 +54,7 @@ function load(): Settings {
 }
 
 export function useSettings() {
-  const [settings, setSettings] = useState<Settings>(load);
+  const [settings, setSettings] = useState<Settings>(loadSettings);
   /** A change, or a function of what's set now (for changes made from somewhere that may be stale). */
   const update = useCallback((patch: Partial<Settings> | ((now: Settings) => Partial<Settings>)) => {
     setSettings((now) => {

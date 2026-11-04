@@ -54,6 +54,22 @@ export function SettingsPage({
 
   return (
     <div className="mx-auto flex max-w-[720px] flex-col gap-6 pb-10">
+      <Section title="Appearance">
+        <Row title="Light or dark" detail="Auto follows your Mac (System Settings › Appearance). The photo viewer stays dark either way, so pictures look their best.">
+          <Segmented
+            label="Appearance"
+            size="sm"
+            value={settings.theme}
+            onValueChange={(v) => update({ theme: v as Settings['theme'] })}
+            options={[
+              { value: 'auto', label: 'Auto' },
+              { value: 'light', label: 'Light' },
+              { value: 'dark', label: 'Dark' },
+            ]}
+          />
+        </Row>
+      </Section>
+
       <Section title="Library" note="What Pinboard shows. It looks in your home folder with Spotlight, so nothing is copied and nothing leaves your Mac.">
         <Row title="Leave out code projects" detail="Developer, and any folder with a project in it (package.json, .git, Cargo.toml…). Their icons and assets aren't your pictures.">
           <Switch checked={settings.skipCode} onCheckedChange={(v) => scanChange({ skipCode: v })} aria-label="Leave out code projects" />
@@ -72,9 +88,9 @@ export function SettingsPage({
           {settings.hidden.length > 0 && (
             <div className="flex flex-col gap-1.5">
               {settings.hidden.map((f) => (
-                <div key={f} className="flex items-center gap-3 rounded-[10px] bg-white/[0.035] px-3 py-2">
-                  <EyeSlashIcon className="size-4 shrink-0 text-white/40" />
-                  <span className="min-w-0 flex-1 truncate text-[13.5px] text-white/80">{f.replaceAll('/', ' / ')}</span>
+                <div key={f} className="flex items-center gap-3 rounded-[10px] bg-ink/[0.035] px-3 py-2">
+                  <EyeSlashIcon className="size-4 shrink-0 text-ink/40" />
+                  <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink/80">{f.replaceAll('/', ' / ')}</span>
                   <Button size="sm" variant="ghost" onClick={() => update({ hidden: settings.hidden.filter((h) => h !== f) })}>
                     Show Again
                   </Button>
@@ -202,9 +218,9 @@ export function SettingsPage({
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
     <section>
-      <h2 className="px-1 pb-2 text-[13px] font-semibold text-white/55">{title}</h2>
-      <div className="divide-y divide-white/[0.06] overflow-hidden rounded-[14px] border border-white/[0.07] bg-white/[0.025]">{children}</div>
-      {note && <p className="px-1 pt-2 text-[12.5px] leading-relaxed text-white/35">{note}</p>}
+      <h2 className="px-1 pb-2 text-[13px] font-semibold text-ink/55">{title}</h2>
+      <div className="divide-y divide-ink/[0.06] overflow-hidden rounded-[14px] border border-ink/[0.07] bg-ink/[0.025]">{children}</div>
+      {note && <p className="px-1 pt-2 text-[12.5px] leading-relaxed text-ink/35">{note}</p>}
     </section>
   );
 }
@@ -215,8 +231,8 @@ function Row({ title, detail, icon, stacked, children }: { title: string; detail
       <div className="flex min-w-0 flex-1 items-start gap-3">
         {icon && <span className="mt-[1px] shrink-0">{icon}</span>}
         <div className="min-w-0">
-          <p className="text-[14.5px] text-white/90">{title}</p>
-          {detail && <p className="mt-0.5 text-[12.5px] leading-relaxed text-white/45">{detail}</p>}
+          <p className="text-[14.5px] text-ink/90">{title}</p>
+          {detail && <p className="mt-0.5 text-[12.5px] leading-relaxed text-ink/45">{detail}</p>}
         </div>
       </div>
       {children && <div className={stacked ? '' : 'shrink-0'}>{children}</div>}

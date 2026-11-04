@@ -50,14 +50,14 @@ export function Tip({ content, keys, side = 'bottom', children }: { content: Rea
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, transition: { duration: 0.1 } }}
               transition={{ type: 'spring', stiffness: 600, damping: 38 }}
-              className="pointer-events-none fixed z-[200] flex items-center gap-2 whitespace-nowrap rounded-[9px] border border-white/10 bg-[rgb(28_28_31/0.96)] px-2.5 py-1.5 text-[12.5px] text-white shadow-[0_8px_24px_-6px_rgb(0_0_0/0.6)] backdrop-blur-xl"
+              className="pointer-events-none fixed z-[200] flex items-center gap-2 whitespace-nowrap rounded-[9px] border border-ink/10 bg-float px-2.5 py-1.5 text-[12.5px] text-ink shadow-[var(--pb-float-shadow)] backdrop-blur-xl"
               style={{ left: at.x + shift, top: at.y, translate: side === 'bottom' ? '-50% 0' : '-50% -100%' }}
             >
               {content}
               {keys && (
                 <span className="flex gap-0.5">
                   {keys.map((k) => (
-                    <span key={k} className="grid min-w-[17px] place-items-center rounded-[4px] bg-white/10 px-1 text-[11px] text-white/70">
+                    <span key={k} className="grid min-w-[17px] place-items-center rounded-[4px] bg-ink/10 px-1 text-[11px] text-ink/70">
                       {k}
                     </span>
                   ))}

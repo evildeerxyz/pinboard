@@ -25,10 +25,22 @@ struct Library {
     /// Thumbnails Quick Look couldn't make (id, size and modification time), so they aren't asked for again.
     failed: Mutex<HashSet<String>>,
     /// Pictures Finder handed to Pinboard (a double-click, Open With), waiting for the window.
-    pending: Mutex<Vec<String>>,
+    pending: Mutex<Pending>,
+    /// Whether Finder has handed Pinboard anything yet.
+    any_opened: std::sync::atomic::AtomicBool,
     /// Opened pictures the scan doesn't list, kept so they stay viewable after a rescan.
     opened: Mutex<HashMap<String, Photo>>,
 }
+
+#[derive(Default)]
+struct Pending {
+    ids: Vec<String>,
+    /// Pinboard was started just to show these (a double-click while it wasn't running).
+    cold: bool,
+}
+
+/// When Pinboard started, to tell a double-click that launched it from one made while it ran.
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
 /// An indexed picture: where it is, when it last changed, and how many pixels Spotlight says it has.
 #[derive(Clone)]
@@ -316,7 +328,14 @@ fn open_files(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
         if ids.is_empty() {
             return;
         }
-        library.pending.lock().unwrap().extend(ids);
+        // The first pictures, arriving within moments of launch, are what Pinboard was opened for.
+        let first = !library.any_opened.swap(true, std::sync::atomic::Ordering::SeqCst);
+        let cold = first && STARTED.get().is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(8));
+        {
+            let mut pending = library.pending.lock().unwrap();
+            pending.ids.extend(ids);
+            pending.cold |= cold;
+        }
         let _ = app.emit("opened", ());
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.unminimize();
@@ -350,15 +369,26 @@ struct Opened {
     ids: Vec<String>,
     /// Records for any of them the scan doesn't list.
     extra: Vec<Photo>,
+    /// Pinboard was launched to show them: closing the viewer closes the window, like Preview.
+    cold: bool,
 }
 
 /// The pictures Finder opened since the window last asked (each is handed over once).
 #[tauri::command]
 fn take_opened(library: State<'_, Arc<Library>>) -> Opened {
-    let ids = std::mem::take(&mut *library.pending.lock().unwrap());
+    let Pending { ids, cold } = std::mem::take(&mut *library.pending.lock().unwrap());
     let opened = library.opened.lock().unwrap();
     let extra = ids.iter().filter_map(|id| opened.get(id).cloned()).collect();
-    Opened { ids, extra }
+    Opened { ids, extra, cold }
+}
+
+/// Closing a picture opened from Finder puts the window away, the way closing a Preview window
+/// does. Pinboard keeps running; its Dock icon brings it back.
+#[tauri::command]
+fn hide_window(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
 }
 
 /// The picture types "Open pictures from Finder in Pinboard" changes.
@@ -493,6 +523,7 @@ fn own_page(url: &tauri::Url) -> bool {
 }
 
 pub fn run() {
+    STARTED.get_or_init(std::time::Instant::now);
     let library = Arc::new(Library::default());
     let workers = Arc::new(Semaphore::new(THUMB_WORKERS));
     let protocol_library = library.clone();
@@ -531,14 +562,21 @@ pub fn run() {
                 responder.respond(response);
             });
         })
-        .invoke_handler(tauri::generate_handler![scan_library, reveal, open_photo, copy_photo, open_privacy_settings, cache_size, clear_cache, reveal_folder, reveal_photos, open_photos, copy_photos, trash, put_back, take_opened, is_default_viewer, set_default_viewer])
+        .invoke_handler(tauri::generate_handler![scan_library, reveal, open_photo, copy_photo, open_privacy_settings, cache_size, clear_cache, reveal_folder, reveal_photos, open_photos, copy_photos, trash, put_back, take_opened, hide_window, is_default_viewer, set_default_viewer])
         .build(tauri::generate_context!())
         .expect("error while building Pinboard")
-        .run(|app, event| {
+        .run(|app, event| match event {
             // A picture double-clicked in Finder, or sent with Open With (at launch, or later).
-            if let tauri::RunEvent::Opened { urls } = event {
-                open_files(app, urls);
+            tauri::RunEvent::Opened { urls } => open_files(app, urls),
+            // The Dock icon clicked with the window put away: bring Pinboard back.
+            tauri::RunEvent::Reopen { has_visible_windows: false, .. } => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                let _ = app.emit("reopened", ());
             }
+            _ => {}
         });
 }
 
