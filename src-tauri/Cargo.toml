@@ -1,0 +1,39 @@
+[package]
+name = "pinboard"
+version = "0.1.0"
+description = "Pinboard: every picture on your Mac, in one place."
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/evildeerxyz/pinboard"
+default-run = "Pinboard"
+
+# macOS names an app by its executable where there's no bundle around it (tauri dev).
+[[bin]]
+name = "Pinboard"
+path = "src/main.rs"
+
+[lib]
+name = "pinboard_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = ["macos-private-api"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }
+percent-encoding = "2"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-image-io = "0.3"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSError", "NSFileManager", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSWorkspace"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

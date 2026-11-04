@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Pinboard shows the pictures in your Downloads folder. Nothing leaves your Mac.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Pinboard shows the pictures on your Desktop. Nothing leaves your Mac.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Pinboard shows the pictures in your Documents folder. Nothing leaves your Mac.</string>
+</dict>
+</plist>

@@ -1,0 +1,118 @@
+@import 'tailwindcss';
+/* basedraft UI's tokens and materials; Tailwind builds its components' classes. */
+@import '@basedraft/ui/theme.css';
+@source '../node_modules/@basedraft/ui/dist';
+
+/* Near-black, like a darkroom: the photos are the only color on screen. Unlayered, so it wins
+   over basedraft's own dark values, including inside its dark overlays. */
+.dark,
+[data-theme='dark'] {
+  --bd-bg: #0a0a0b;
+  --bd-surface: #111113;
+  --bd-raised: #18181b;
+  --bd-line: #232327;
+  --bd-line-subtle: #1b1b1e;
+  --bd-ui-track: #161618;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* The window is see-through: the sidebar sits on macOS's own sidebar material (the desktop,
+   blurred), and the photos sit on solid black beside it. */
+html,
+body {
+  background: transparent;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  color: var(--bd-fg);
+  /* SF Pro Rounded, the Mac's own rounded system face, everywhere (WebKit calls it ui-rounded). */
+  font-family: ui-rounded, 'SF Pro Rounded', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.font-display {
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+/* Cards rise into place as they join the page, a few at a time. */
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.card-in {
+  animation: card-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* A card shows only what fits it: narrow ones keep the buttons' icons and drop their words, short
+   ones drop the folder line, so nothing overlaps or gets cut at the edge. */
+[data-photo] {
+  container-type: size;
+}
+@container (max-width: 252px) {
+  .pill {
+    width: 38px;
+    padding-inline: 0;
+    justify-content: center;
+  }
+  .pill-label {
+    display: none;
+  }
+}
+@container (max-height: 170px) {
+  .card-where {
+    display: none;
+  }
+}
+
+/* While the action bar is up, toasts rise above it instead of covering its buttons. */
+[data-bd-toaster] {
+  transition: translate 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+body:has([role='toolbar'][aria-label^='Ticked photos']) [data-bd-toaster] {
+  translate: 0 -84px;
+}
+
+/* After the grid is dealt again for a new width, its cards glide to their new places. */
+.gliding > [data-photo] {
+  transition:
+    left 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    top 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* A strip that scrolls without showing a bar. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-in {
+    animation: none;
+  }
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+}

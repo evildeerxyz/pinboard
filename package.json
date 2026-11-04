@@ -1,0 +1,39 @@
+{
+  "name": "pinboard",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Every picture on your Mac, in one place. A photo viewer for macOS.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/evildeerxyz/pinboard.git"
+  },
+  "type": "module",
+  "scripts": {
+    "vite:dev": "vite",
+    "vite:build": "tsc --noEmit && vite build",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@basedraft/ui": "^0.3.1",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tauri-apps/api": "^2.12.4",
+    "motion": "^14.9.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.4",
+    "@tauri-apps/cli": "^2.12.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "puppeteer-core": "^25.16.0",
+    "tailwindcss": "^4.3.4",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.5"
+  }
+}
