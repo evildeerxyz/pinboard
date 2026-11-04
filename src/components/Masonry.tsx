@@ -1,13 +1,18 @@
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Skeleton } from '@basedraft/ui';
 import { ArrowSquareOutIcon, CheckCircleIcon, CheckIcon, CopyIcon, FolderOpenIcon, FolderSimpleIcon, HeartIcon, TrashIcon } from '@phosphor-icons/react';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { animate } from 'motion/react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { thumbUrl } from '../lib/api';
 import type { Indexed } from '../lib/library';
+import { FOLD } from '../lib/motion';
 import { PlaceSquare } from './Sidebar';
 
 /** How many cards are on the page at first, and how many more join each time you near the end. */
 const PAGE = 180;
 const GAP = 14;
+/** How long a fold holds the grid at the width it ends at: the sidebar's spring settles in this. */
+const FOLD_MS = 460;
+
 
 export type CardActions = {
   open: (photo: Indexed) => void;
@@ -45,6 +50,7 @@ export function Masonry({
   column = 250,
   hoverActions = true,
   focus,
+  expect,
 }: {
   photos: Indexed[];
   favorites: Set<string>;
@@ -58,18 +64,42 @@ export function Masonry({
   /** A photo to point out: the grid goes down to it (adding cards if it's further than the first
    * page), centers it, and rings it for a moment. A new `tick` points again. */
   focus?: { id: string; tick: number } | null;
+  /** The grid is about to get wider or narrower by `by` pixels (the sidebar folding). It deals for
+   * the width it will end at, right away, and every card glides straight to its new place in step
+   * with the sidebar: one move each, nothing reshuffling on the way. A new `tick` for each fold. */
+  expect?: { by: number; tick: number } | null;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const end = useRef<HTMLDivElement>(null);
-  /** The width the cards were last dealt for. */
-  const [dealt, setDealt] = useState(0);
-  const dealtRef = useRef(0);
   const [shown, setShown] = useState(PAGE);
   const [focusing, setFocusing] = useState<string | null>(null);
-  /** The column width last dealt for: a new card size glides the cards too. */
-  const columnRef = useRef(column);
-  /** Where each card goes, as last dealt. */
+  /** The box has been measured: until then there's nothing to place cards in. */
+  const [measured, setMeasured] = useState(false);
+  /** Columns wide enough for the bigger thumbnails. */
+  const [wide, setWide] = useState(false);
+  /** What a deal needs, current even inside the resize observer (which runs outside React). */
+  const input = useRef({ photos, shown, column });
+  input.current = { photos, shown, column };
+  /** Where each card goes, as last dealt, and how many columns that was. */
   const placesRef = useRef<Place[]>([]);
+  const colsRef = useRef(0);
+  const columnRef = useRef(column);
+  const wideTimer = useRef(0);
+  /** The cards gliding now, to stop if they're sent somewhere else on the way. */
+  const gliding = useRef(new WeakMap<HTMLElement, { stop: () => void }>()).current;
+  /** A fold the cards are following: the grid's width at its start and end, and each card's way. */
+  const following = useRef<{ from: number; to: number; cards: Array<{ el: HTMLElement; dx: number; dy: number; s: number }> } | null>(null);
+  /** Puts each card of a fold as far along its way as the grid's width is along the fold. */
+  const follow = useCallback((width: number) => {
+    const f = following.current;
+    if (!f) return;
+    const along = f.to === f.from ? 1 : Math.min(1, Math.max(0, (width - f.from) / (f.to - f.from)));
+    const left = 1 - along;
+    for (const c of f.cards) c.el.style.transform = left < 0.001 ? '' : `translate(${c.dx * left}px, ${c.dy * left}px) scale(${1 + (c.s - 1) * left})`;
+    if (left < 0.001) following.current = null;
+  }, []);
+  /** While a fold plays: the width it ends at, and until when. Resizes in between don't deal. */
+  const hold = useRef<{ width: number; until: number } | null>(null);
   /** A photo being pointed out stays in the middle while the grid settles (the sidebar sliding in
    * deals the columns again), until `until`. */
   const pin = useRef<{ index: number; until: number } | null>(null);
@@ -81,65 +111,152 @@ export function Masonry({
     const place = placesRef.current[pinned.index];
     const scroller = el.closest<HTMLElement>('[data-scroller]');
     if (!place || !scroller) return;
-    // Where it ends up (not where it is mid-glide), scaled as the grid is right now.
-    const s = Number(el.style.getPropertyValue('--s')) || 1;
+    // Where it ends up (not where it is mid-glide).
     const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
-    scroller.scrollTop = top + (place.y + place.h / 2) * s - scroller.clientHeight / 2;
+    scroller.scrollTop = top + place.y + place.h / 2 - scroller.clientHeight / 2;
   }, []);
+
+  /** Deals the cards into as many columns as fit the width, each under the shortest column, and
+   * writes each card's place straight onto it: no React render. It runs on every frame of a resize,
+   * so while the sidebar slides the columns reflow with it (not after); when the number of columns
+   * changes, the cards glide to their new places. */
+  const deal = useCallback(
+    (width: number, glide: false | 'spring' | 'fold' = false) => {
+      const el = box.current;
+      if (!el || width <= 0) return;
+      const { photos, shown, column } = input.current;
+      const cols = Math.max(2, Math.floor((width + GAP) / (column + GAP)));
+      const colW = (width - GAP * (cols - 1)) / cols;
+      const tops = new Array(cols).fill(0);
+      const n = Math.min(shown, photos.length);
+      const places: Place[] = new Array(n);
+      for (let i = 0; i < n; i++) {
+        let at = 0;
+        for (let c = 1; c < cols; c++) if (tops[c] < tops[at] - 0.5) at = c;
+        const h = colW * ratioOf(photos[i]);
+        places[i] = { x: at * (colW + GAP), y: tops[at], w: colW, h };
+        tops[at] += h + GAP;
+      }
+      colsRef.current = cols;
+      const cards = el.children;
+      // Gliding: where each card on (or near) the screen is right now, mid-glide or not, so it can
+      // be shown moving from there once it's been put in its new place.
+      const box0 = glide ? el.getBoundingClientRect() : null;
+      const view = glide ? el.closest('[data-scroller]')?.getBoundingClientRect() : null;
+      const from: Array<DOMRect | null> = [];
+      if (box0 && view) {
+        for (let i = 0; i < n; i++) {
+          const c = cards[i] as HTMLElement | undefined;
+          const r = c?.style.top ? c.getBoundingClientRect() : null;
+          const p = places[i];
+          const near = (top: number, bottom: number) => bottom > view.top - 400 && top < view.bottom + 400;
+          from[i] = r && (near(r.top, r.bottom) || near(box0.top + p.y, box0.top + p.y + p.h)) ? r : null;
+          if (from[i]) gliding.get(c!)?.stop();
+        }
+        // A fold in flight, sent somewhere else: its cards carry on from where they are now.
+        if (following.current) {
+          for (const f of following.current.cards) f.el.style.transform = '';
+          following.current = null;
+        }
+      }
+      for (let i = 0; i < n; i++) {
+        const c = cards[i] as HTMLElement | undefined;
+        if (!c) continue;
+        const p = places[i];
+        c.style.left = `${p.x}px`;
+        c.style.top = `${p.y}px`;
+        c.style.width = `${p.w}px`;
+        c.style.height = `${p.h}px`;
+      }
+      // …then each slides from where it was to where it now is, on a transform alone (no layout on
+      // the way, so the sidebar's slide stays smooth). Same shape before and after, so the scale is
+      // even. On the sidebar's own spring, from the same frame: a card's path on screen is then a
+      // straight line from where it was to where it ends, with no drifting back.
+      if (box0) {
+        const moves: Array<{ el: HTMLElement; dx: number; dy: number; s: number }> = [];
+        for (let i = 0; i < n; i++) {
+          const r = from[i];
+          if (!r) continue;
+          const p = places[i];
+          const dx = r.left - (box0.left + p.x);
+          const dy = r.top - (box0.top + p.y);
+          const s = r.width / p.w;
+          if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(s - 1) < 0.002) continue;
+          moves.push({ el: cards[i] as HTMLElement, dx, dy, s });
+        }
+        if (glide === 'fold') {
+          // Each card follows the fold itself: however far the grid's width has got from where it
+          // was to where it's going, each card has got that far along its way. Its path on screen
+          // is a straight line, in step with the sidebar to the frame.
+          following.current = { from: el.clientWidth, to: width, cards: moves };
+          follow(el.clientWidth);
+        } else {
+          for (const m of moves) gliding.set(m.el, animate(m.el, { x: [m.dx, 0], y: [m.dy, 0], scale: [m.s, 1] }, FOLD));
+        }
+      }
+      el.style.height = `${n ? Math.max(0, Math.max(...tops) - GAP) : 0}px`;
+      placesRef.current = places;
+      // Bigger thumbnails for wide columns, but only once a resize has settled: swapping every
+      // card's picture mid-slide would make the slide stutter.
+      const big = colW * 2 > 560;
+      clearTimeout(wideTimer.current);
+      wideTimer.current = window.setTimeout(() => setWide((now) => (now === big ? now : big)), 300);
+      center();
+    },
+    [center, follow, gliding],
+  );
 
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    setDealt(el.clientWidth);
-    let settle = 0;
-    let still = 0;
+    setMeasured(true);
+    // A window being resized deals on every frame, so the columns follow the edge. During a fold
+    // the cards are already gliding to where the fold ends, so it waits.
     const ro = new ResizeObserver(([e]) => {
-      const w = e.contentRect.width;
-      if (dealtRef.current) el.style.setProperty('--s', String(w / dealtRef.current));
-      center();
-      clearTimeout(settle);
-      settle = window.setTimeout(() => {
-        if (Math.abs(w - dealtRef.current) < 1) return;
-        // Cards glide to their new places only right after a deal, not while scaling.
-        el.classList.add('gliding');
-        setDealt(w);
-        clearTimeout(still);
-        still = window.setTimeout(() => el.classList.remove('gliding'), 480);
-      }, 160);
+      if (hold.current && performance.now() < hold.current.until) {
+        follow(e.contentRect.width);
+        return center();
+      }
+      deal(e.contentRect.width);
     });
     ro.observe(el);
     return () => {
-      clearTimeout(settle);
-      clearTimeout(still);
       ro.disconnect();
+      clearTimeout(wideTimer.current);
     };
-  }, []);
+  }, [deal]);
 
-  // Each card's place is written straight onto it, before the frame is painted: a new deal moves
-  // the cards without React rendering any of them again. A deal is laid out at its own width, so
-  // no scaling is left over.
+  // After every render (new photos, more of them, another card size): deal again, before the frame
+  // is painted. A new card size glides the cards to their places.
   useLayoutEffect(() => {
     const el = box.current;
-    if (!el) return;
-    dealtRef.current = dealt;
-    el.style.setProperty('--s', '1');
-    if (columnRef.current !== column) {
-      columnRef.current = column;
-      el.classList.add('gliding');
-      window.setTimeout(() => el.classList.remove('gliding'), 480);
-    }
-    const cards = el.children;
-    places.forEach((p, i) => {
-      const c = cards[i] as HTMLElement | undefined;
-      if (!c) return;
-      c.style.left = `${(p.x / dealt) * 100}%`;
-      c.style.width = `${(p.w / dealt) * 100}%`;
-      c.style.top = `calc(${p.y}px * var(--s, 1))`;
-      c.style.height = `calc(${p.h}px * var(--s, 1))`;
-    });
-    placesRef.current = places;
-    center();
+    if (!el || !measured) return;
+    const resized = columnRef.current !== column;
+    columnRef.current = column;
+    const folding = hold.current && performance.now() < hold.current.until ? hold.current.width : 0;
+    deal(folding || el.clientWidth, resized && 'spring');
   });
+
+  // A fold: deal once for the width it ends at, glide there, then check against the real width.
+  // Before paint, in the same frame the sidebar starts to move.
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!expect || !el) return;
+    const width = el.clientWidth + expect.by;
+    hold.current = { width, until: performance.now() + FOLD_MS };
+    deal(width, 'fold');
+    const done = window.setTimeout(() => {
+      hold.current = null;
+      follow(width);
+      if (following.current) {
+        for (const f of following.current.cards) f.el.style.transform = '';
+        following.current = null;
+      }
+      if (Math.abs(el.clientWidth - width) > 0.5) deal(el.clientWidth, 'spring');
+    }, FOLD_MS + 60);
+    return () => clearTimeout(done);
+  }, [expect?.tick]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   useEffect(() => {
     if (!focus) return;
@@ -172,28 +289,10 @@ export function Masonry({
     return () => io.disconnect();
   }, [photos.length, shown]);
 
-  const { places, height, wide } = useMemo(() => {
-    // Not measured yet (the first render, before layout): nothing to deal.
-    if (!dealt) return { places: [] as Place[], height: 0, wide: false };
-    const cols = Math.max(2, Math.floor((dealt + GAP) / (column + GAP)));
-    const colW = (dealt - GAP * (cols - 1)) / cols;
-    const tops = new Array(cols).fill(0);
-    const places = photos.slice(0, shown).map((p): Place => {
-      let at = 0;
-      for (let c = 1; c < cols; c++) if (tops[c] < tops[at] - 0.5) at = c;
-      const h = colW * ratioOf(p);
-      const place = { x: at * (colW + GAP), y: tops[at], w: colW, h };
-      tops[at] += h + GAP;
-      return place;
-    });
-    return { places, height: Math.max(0, Math.max(...tops) - GAP), wide: colW * 2 > 560 };
-  }, [photos, shown, dealt, column]);
-
   return (
     <div>
-      <div ref={box} className="relative" style={{ height: `calc(${height}px * var(--s, 1))` }}>
-        {places.map((_, i) => {
-          const p = photos[i];
+      <div ref={box} className="relative">
+        {(measured ? photos.slice(0, shown) : []).map((p, i) => {
           return (
             <Card
               key={p.id}

@@ -37,14 +37,21 @@ const server = createServer((req, res) => {
 }).listen(1431, '127.0.0.1');
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--hide-scrollbars'] });
-/** The app's commands, answered from the dump. `opened` is what Finder hands over at launch. */
-const mock = (lib, opened) => {
+/** The app's commands, answered from the dump. `opened` is what Finder hands over at launch;
+ * `scanDelay` holds the library back, as a slow first scan would. */
+const mock = (lib, opened, scanDelay = 0) => {
   window.__calls = [];
   window.__default = false;
   window.__opened = opened ?? { ids: [], extra: [] };
   window.__shapes = Object.fromEntries(JSON.parse(lib).map((p) => [p.id, p.width && p.height ? p.width / p.height : 0]));
   const answers = {
-    scan_library: () => ({ photos: JSON.parse(lib), blocked: [] }),
+    scan_library: () => new Promise((done) => setTimeout(() => done({ photos: JSON.parse(lib), blocked: [] }), scanDelay)),
+    // What the window looked like at the moment it was shown.
+    show_window: () =>
+      void (window.__shownWith ??= {
+        sidebar: document.querySelector('[data-sidebar]')?.getBoundingClientRect().width,
+        covered: !!document.querySelector('[data-finder-cover]'),
+      }),
     cache_size: () => 123_400_000,
     trash: (args) => ({ trashed: args.ids, failed: [] }),
     put_back: (args) => args.ids,
@@ -339,30 +346,81 @@ await check('⌘\\ folds and unfolds the sidebar', async () => {
 });
 
 await check('the sidebar folds and unfolds smoothly', async () => {
+  try {
   for (const way of ['fold', 'unfold']) {
-    const { xs, ts } = await page.evaluate(async () => {
+    const { xs, ts, cols, reversals, before } = await page.evaluate(async () => {
       const main = document.querySelector('main');
       const xs = [];
       const ts = [];
+      // How many columns the grid is dealt into, frame by frame (the places it gives the cards).
+      const cols = [];
+      const columns = () => new Set([...document.querySelectorAll('[data-photo]')].slice(0, 24).map((c) => c.style.left)).size;
+      // Where the first cards actually are on screen, frame by frame.
+      const cards = [...document.querySelectorAll('[data-photo]')].slice(0, 12);
+      const tracks = cards.map(() => []);
+      const before = columns();
       dispatchEvent(new KeyboardEvent('keydown', { key: '\\', metaKey: true }));
       const t0 = performance.now();
       await new Promise((done) => {
         const step = (t) => {
           xs.push(main.getBoundingClientRect().left);
           ts.push(t);
+          cols.push(columns());
+          cards.forEach((c, k) => {
+            const r = c.getBoundingClientRect();
+            tracks[k].push([r.left, r.top]);
+          });
           if (performance.now() - t0 < 1300) requestAnimationFrame(step);
           else done();
         };
         requestAnimationFrame(step);
       });
-      return { xs, ts };
+      // A card shakes when it turns back on its way: count each card's reversals, left-right and up-down.
+      const detail = [];
+      const reversals = tracks.map((t, c) => {
+        let turns = 0;
+        for (const axis of [0, 1]) {
+          let sign = 0;
+          for (let k = 1; k < t.length; k++) {
+            const d = t[k][axis] - t[k - 1][axis];
+            if (Math.abs(d) < 2) continue;
+            if (sign && Math.sign(d) !== sign) {
+              turns++;
+              detail.push(`card ${c} ${axis ? 'y' : 'x'} frame ${k} by ${d.toFixed(1)}px`);
+            }
+            sign = Math.sign(d);
+          }
+        }
+        return turns;
+      });
+      window.__turns = detail;
+      return { xs, ts, cols, reversals, before };
     });
     const leap = Math.max(...xs.slice(1).map((x, k) => Math.abs(x - xs[k])));
     const slowest = Math.max(...ts.slice(1).map((t, k) => t - ts[k]));
     console.log(`  ${way}: ${xs.length} frames, panel ${Math.round(xs[0])}→${Math.round(xs.at(-1))}px, biggest step ${Math.round(leap)}px, slowest frame ${Math.round(slowest)}ms`);
     expect(leap < 45, `${way}: panel leapt ${Math.round(leap)}px in one frame`);
     expect(slowest < 50, `${way}: a frame took ${Math.round(slowest)}ms`);
+    // The columns reflow while the panel moves, not after it has stopped.
+    const moving = xs.map((x, k) => (k && Math.abs(x - xs[k - 1]) > 0.5 ? k : -1)).filter((k) => k >= 0);
+    const lastMove = moving.at(-1) ?? 0;
+    const settled = cols.findIndex((c, k) => cols.slice(k).every((d) => d === cols.at(-1)));
+    console.log(`        columns ${before}→${cols.at(-1)}, settled at frame ${settled}, panel stopped at frame ${lastMove}`);
+    expect(before !== cols.at(-1), `${way}: the number of columns didn't change (${before})`);
+    expect(settled <= lastMove, `${way}: the columns changed after the panel stopped (frame ${settled} vs ${lastMove})`);
+    console.log(`        cards turning back on the way: ${reversals}`);
+    expect(reversals.every((r) => r === 0), `${way}: cards shook on their way (${reversals}): ${await page.evaluate(() => window.__turns.join('; '))}`);
     await wait(400);
+  }
+  } finally {
+    // Whatever happened, leave the sidebar open for the checks after this one.
+    await wait(500);
+    if ((await page.$eval('[data-sidebar]', (el) => el.getBoundingClientRect().width)) < 100) {
+      await page.keyboard.down('Meta');
+      await page.keyboard.press('\\');
+      await page.keyboard.up('Meta');
+      await wait(800);
+    }
   }
 });
 
@@ -380,6 +438,40 @@ await check('right-click shows the photo menu, and Show in Finder asks the app',
   await wait(200);
   const calls = await page.evaluate(() => window.__calls.map((c) => c[0]));
   expect(calls.includes('reveal'), `calls: ${calls.join(', ')}`);
+});
+
+await check('lines and text line up: header lines meet, the caption sits on one baseline, the viewer has the sidebar switch', async () => {
+  const lines = await page.evaluate(() => ({
+    sidebar: Math.round(document.querySelector('[data-sidebar-head]').getBoundingClientRect().bottom),
+    panel: Math.round(document.querySelector('main header').getBoundingClientRect().bottom),
+  }));
+  expect(lines.sidebar === lines.panel, `header lines at ${lines.sidebar}px and ${lines.panel}px`);
+  await (await page.$('[data-photo] > button:not([data-tick])')).click();
+  await wait(900);
+  const viewer = await page.evaluate(() => {
+    const middle = (el) => {
+      const r = el.getBoundingClientRect();
+      return Math.round(r.top + r.height / 2);
+    };
+    const parts = [...document.querySelectorAll('[role="dialog"] [data-caption] > span > span')];
+    return {
+      bottoms: [...new Set(parts.map((p) => Math.round(p.getBoundingClientRect().bottom)))],
+      toggle: document.querySelector('[data-viewer-sidebar]') ? middle(document.querySelector('[data-viewer-sidebar]')) : null,
+      close: middle(document.querySelector('[role="dialog"] [data-close]')),
+      header: middle(document.querySelector('main header')),
+    };
+  });
+  expect(viewer.bottoms.length === 1, `caption parts end at ${viewer.bottoms}`);
+  expect(viewer.toggle !== null && viewer.toggle === viewer.close && Math.abs(viewer.toggle - viewer.header) <= 1, `sidebar switch at ${viewer.toggle}, Close at ${viewer.close}, header line at ${viewer.header}`);
+  await page.click('[data-viewer-sidebar]');
+  await wait(900);
+  const folded = await page.evaluate(() => document.querySelector('[data-sidebar]').getBoundingClientRect().width);
+  expect(folded === 0, `sidebar ${folded}px after the viewer's switch`);
+  await page.screenshot({ path: join(OUT, 'viewer-folded.png') });
+  await page.click('[data-viewer-sidebar]');
+  await wait(900);
+  await page.keyboard.press('Escape');
+  await wait(700);
 });
 
 await check('tooltips float free of the panel and stay in the window', async () => {
@@ -582,7 +674,7 @@ await check('a picture opened from Finder shows on its own (no sidebar); See fol
       };
       const bar = document.querySelector('[data-bar]');
       return {
-        sidebar: document.querySelector('aside')?.parentElement?.getBoundingClientRect().width,
+        sidebar: document.querySelector('[data-sidebar]')?.getBoundingClientRect().width,
         title: document.querySelector('main header h1')?.textContent,
         bar: bar?.textContent ?? '',
         caption: document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '',
@@ -594,8 +686,10 @@ await check('a picture opened from Finder shows on its own (no sidebar); See fol
     });
   let seen = await look();
   expect(seen.sidebar === 0, `sidebar ${seen.sidebar}px wide, want none`);
-  expect(seen.bar.includes(target.name) && seen.bar.includes(`2 of ${inFolder.length.toLocaleString()}`), `title bar “${seen.bar}”`);
-  expect(!seen.caption.includes(target.name), 'the name is in the caption as well as the title bar');
+  const shownWith = await finder.evaluate(() => window.__shownWith);
+  expect(shownWith && shownWith.sidebar === 0 && shownWith.covered, `the window was shown looking like ${JSON.stringify(shownWith)}, want no sidebar and Pinboard covered`);
+  expect(seen.bar.includes(`2 of ${inFolder.length.toLocaleString()}`) && !seen.bar.includes(target.name), `title bar “${seen.bar}”`);
+  expect(seen.caption.startsWith(target.name), `caption ${seen.caption}`);
   expect(seen.lead === 'See folder in Pinboard' && !seen.close, `lead “${seen.lead}”, close ${seen.close}`);
   expect(seen.middles.length >= 4 && seen.middles.every((m) => Math.abs(m - 32) <= 1), `title bar not level with the traffic lights (~32px): ${seen.middles}`);
   await finder.screenshot({ path: join(OUT, 'opened-from-finder.png') });
@@ -607,7 +701,7 @@ await check('a picture opened from Finder shows on its own (no sidebar); See fol
   await finder.evaluate(() => window.__emit?.('opened'));
   await wait(900);
   seen = await look();
-  expect(seen.bar.includes(next.name) && seen.sidebar === 0, `after a second open: ${seen.bar}, sidebar ${seen.sidebar}`);
+  expect(seen.caption.startsWith(next.name) && seen.sidebar === 0, `after a second open: ${seen.caption}, sidebar ${seen.sidebar}`);
 
   // See folder in Pinboard: the whole app, at that folder, with the picture on screen.
   await finder.click('[data-see-folder]');
@@ -651,7 +745,7 @@ await check('a picture opened from Finder shows on its own (no sidebar); See fol
   await wait(900);
   await cold.evaluate(() => window.__emit?.('hidden'));
   await wait(1300);
-  const back = await cold.evaluate(() => ({ viewer: !!document.querySelector('[role="dialog"][aria-modal]'), sidebar: document.querySelector('aside')?.parentElement?.getBoundingClientRect().width }));
+  const back = await cold.evaluate(() => ({ viewer: !!document.querySelector('[role="dialog"][aria-modal]'), sidebar: document.querySelector('[data-sidebar]')?.getBoundingClientRect().width }));
   expect(!back.viewer && back.sidebar === 272, `after the red light: ${JSON.stringify(back)}`);
   await cold.close();
 
@@ -667,9 +761,41 @@ await check('a picture opened from Finder shows on its own (no sidebar); See fol
     caption: document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '',
     lead: document.querySelector('[data-see-folder]')?.textContent ?? '',
   }));
-  expect(outsideSeen.bar.startsWith('IMG_0001.jpg') && outsideSeen.caption.includes('DCIM') && !outsideSeen.caption.includes(' × '), `bar ${outsideSeen.bar}, caption ${outsideSeen.caption}`);
+  expect(outsideSeen.caption.startsWith('IMG_0001.jpg') && outsideSeen.caption.includes('DCIM') && !outsideSeen.caption.includes(' × '), `caption ${outsideSeen.caption}`);
   expect(outsideSeen.lead === 'Open Pinboard', `lead “${outsideSeen.lead}”`);
   await outside.close();
+});
+
+await check('a picture from Finder shows before the library has loaded, then gets its folder', async () => {
+  const counts = tally((p) => p.folder);
+  const folder = counts.find((f) => f && photos.filter((p) => p.folder === f).length >= 3);
+  const inFolder = photos.filter((p) => p.folder === folder);
+  const target = inFolder[1];
+  const slow = await browser.newPage();
+  await slow.setViewport({ width: 1320, height: 860 });
+  // Spotlight's record comes with the picture; the library takes 2.5 s.
+  await slow.evaluateOnNewDocument(mock, library, { ids: [target.id], extra: [target], cold: true }, 2500);
+  await slow.goto('http://localhost:1430', { waitUntil: 'domcontentloaded' });
+  await wait(900);
+  const caption = () => slow.evaluate(() => document.querySelector('[role="dialog"] [data-caption]')?.textContent ?? '');
+  const bar = () => slow.evaluate(() => document.querySelector('[data-bar]')?.textContent ?? '');
+  const shownWith = await slow.evaluate(() => window.__shownWith);
+  expect(shownWith?.sidebar === 0 && shownWith.covered, `shown looking like ${JSON.stringify(shownWith)}`);
+  expect((await caption()).startsWith(target.name), `before the library: caption “${await caption()}”`);
+  await wait(2600);
+  expect((await caption()).startsWith(target.name), `after: caption “${await caption()}” (it should stay on the same picture)`);
+  expect((await bar()).includes(`2 of ${inFolder.length.toLocaleString()}`), `after: bar “${await bar()}”`);
+  await slow.close();
+
+  // An ordinary launch shows Pinboard itself.
+  const plain = await browser.newPage();
+  await plain.setViewport({ width: 1320, height: 860 });
+  await plain.evaluateOnNewDocument(mock, library);
+  await plain.goto('http://localhost:1430', { waitUntil: 'networkidle0' });
+  await wait(800);
+  const plainShown = await plain.evaluate(() => window.__shownWith);
+  expect(plainShown && plainShown.sidebar > 0 && !plainShown.covered, `an ordinary launch was shown looking like ${JSON.stringify(plainShown)}`);
+  await plain.close();
 });
 
 await check('Settings can make Pinboard the app pictures open in from Finder', async () => {

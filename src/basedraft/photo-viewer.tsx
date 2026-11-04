@@ -80,6 +80,8 @@ export function PhotoViewer({
   backdropCloses = true,
   bar = false,
   title,
+  lead,
+  leadInset = 16,
 }: {
   photos: ViewerPhoto[];
   start: number;
@@ -101,6 +103,9 @@ export function PhotoViewer({
   bar?: boolean;
   /** What the title bar says (the photo's name, and where it is in the list). */
   title?: (index: number) => ReactNode;
+  /** A button at the top left (the sidebar's switch), and how far in it sits. */
+  lead?: ReactNode;
+  leadInset?: number;
 }) {
   const still = useReducedMotion();
   const [i, setI] = useState(start);
@@ -110,8 +115,18 @@ export function PhotoViewer({
   const [sharp, setSharp] = useState<Record<string, boolean>>({});
   const dialog = useRef<HTMLDivElement>(null);
   const first = useRef(true);
-  const im = photos[i];
+  const im = photos[i] ?? photos[0];
   const many = photos.length > 1;
+  // The list can change while it's open (a picture from Finder shown at once, then joined by the
+  // others in its folder): it stays on the same picture, before anything is painted.
+  const showing = useRef(photos[start]?.id);
+  useLayoutEffect(() => {
+    const at = photos.findIndex((p) => p.id === showing.current);
+    if (at >= 0 && at !== i) {
+      setI(at);
+      onIndex?.(at);
+    }
+  }, [photos]); // eslint-disable-line react-hooks/exhaustive-deps
   const bottom = filmstrip && many ? BOTTOM : BOTTOM_BARE;
   const boxOf = (p: ViewerPhoto) => fit(shape(p).w, shape(p).h, area, bottom);
   const box = boxOf(im);
@@ -154,6 +169,7 @@ export function PhotoViewer({
     const next = (to + n) % n;
     if (next === i) return;
     setDir(to > i ? 1 : -1);
+    showing.current = photos[next].id;
     setI(next);
     onIndex?.(next);
   };
@@ -258,22 +274,28 @@ export function PhotoViewer({
           // A title bar, the way Preview and Quick Look have one: one row level with the traffic
           // lights, the name in the middle, the actions at the right. It moves the window too.
           <div data-bd-ui="" data-bar data-tauri-drag-region className="absolute inset-x-0 top-0 flex h-[54px] items-center justify-end pr-3">
-            <div data-bd-ui="" className="pointer-events-none absolute inset-y-0 left-[300px] right-[300px] flex items-center justify-center gap-2 text-[13px]">
+            <div data-bd-ui="" className="pointer-events-none absolute inset-y-0 left-[300px] right-[300px] flex items-center justify-center">
               {title?.(i)}
             </div>
-            <div data-bd-ui="" className="relative flex items-center gap-1">
+            <div data-bd-ui="" className="relative flex items-center gap-2">
               {actions?.(i)}
             </div>
           </div>
         ) : (
           <>
+            {/* The top row sits on the panel header's line (27px down, where the traffic lights are). */}
+            {lead && (
+              <div data-bd-ui="" className="absolute top-[11px] flex transition-[left] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]" style={{ left: leadInset }}>
+                {lead}
+              </div>
+            )}
             {/* Where you are, at the top, level with the buttons. */}
             {many && (
-              <span data-bd-ui="" className="absolute left-1/2 top-[22px] -translate-x-1/2 rounded-full bg-white/10 px-3.5 py-1.5 text-[13px] font-medium tabular-nums text-white/85 backdrop-blur-xl">
+              <span data-bd-ui="" className="absolute left-1/2 top-[12px] -translate-x-1/2 rounded-full bg-white/10 px-3.5 py-1.5 text-[13px] font-medium tabular-nums text-white/85 backdrop-blur-xl">
                 {(i + 1).toLocaleString()} of {photos.length.toLocaleString()}
               </span>
             )}
-            <div data-bd-ui="" className="absolute right-4 top-4 flex items-center gap-2">
+            <div data-bd-ui="" className="absolute right-4 top-[7px] flex items-center gap-2">
               {actions?.(i)}
               <button data-bd-ui="" type="button" data-close aria-label="Close" onClick={close} className="grid size-10 place-items-center rounded-full bg-white/10 text-white outline-none backdrop-blur-xl transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white">
                 <XIcon weight="regular" className="size-4" />

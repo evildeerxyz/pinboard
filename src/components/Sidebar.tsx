@@ -77,7 +77,9 @@ export const Sidebar = memo(function Sidebar({
   return (
     <aside className="flex h-full w-[272px] shrink-0 flex-col">
       {/* The app's name, beside the window's traffic lights (its icon in their place in full screen). */}
-      <div data-tauri-drag-region className={`flex h-[64px] shrink-0 items-center gap-2.5 border-b border-ink/[0.07] pr-3 ${appIcon ? 'pl-[20px]' : 'pl-[96px]'}`}>
+      {/* 60px tall with 5px above, so its line meets the panel header's (the panel is inset 5px) and
+          the name stays level with the traffic lights. */}
+      <div data-tauri-drag-region data-sidebar-head className={`flex h-[60px] shrink-0 items-center gap-2.5 border-b border-ink/[0.07] pr-3 pt-[5px] ${appIcon ? 'pl-[20px]' : 'pl-[96px]'}`}>
         {appIcon && <img src={appIcon} alt="" draggable={false} className="size-[26px] shrink-0 rounded-[7px] shadow-[0_1px_3px_rgb(0_0_0/0.4)]" />}
         <span data-tauri-drag-region className="min-w-0 flex-1 truncate text-[15px] font-semibold tracking-[-0.01em] text-ink">{appName}</span>
       </div>

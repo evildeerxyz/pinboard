@@ -28,6 +28,8 @@ struct Library {
     pending: Mutex<Pending>,
     /// Whether Finder has handed Pinboard anything yet.
     any_opened: std::sync::atomic::AtomicBool,
+    /// The window has been shown by the page (it starts hidden, so nothing half-ready flashes).
+    shown: std::sync::atomic::AtomicBool,
     /// Opened pictures the scan doesn't list, kept so they stay viewable after a rescan.
     opened: Mutex<HashMap<String, Photo>>,
 }
@@ -35,12 +37,26 @@ struct Library {
 #[derive(Default)]
 struct Pending {
     ids: Vec<String>,
+    /// What Spotlight says about each, so they can be shown before the library has loaded.
+    records: Vec<Photo>,
     /// Pinboard was started just to show these (a double-click while it wasn't running).
     cold: bool,
 }
 
 /// When Pinboard started, to tell a double-click that launched it from one made while it ran.
 static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// With PINBOARD_TRACE set to a file, notes when each step of starting up happens (for tracking
+/// down anything that shows up late or flashes). Off otherwise.
+fn trace(what: &str) {
+    if let Some(path) = std::env::var_os("PINBOARD_TRACE") {
+        use std::io::Write;
+        let ms = STARTED.get().map(|t| t.elapsed().as_millis()).unwrap_or(0);
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "{ms:>6} ms  {what}");
+        }
+    }
+}
 
 /// An indexed picture: where it is, when it last changed, and how many pixels Spotlight says it has.
 #[derive(Clone)]
@@ -302,45 +318,75 @@ fn copy_photo(id: String, library: State<'_, Arc<Library>>) -> Result<(), String
     copy_photos(vec![id], library)
 }
 
-/// Files Finder asks Pinboard to open. Only picture files are taken. One the scan doesn't list is
-/// described from Spotlight (`mdls`, so nothing is decoded here) and added, so it can be shown.
-/// Then the window is told, and brought forward.
+/// Files Finder asks Pinboard to open. Straight away, before anything touches the files (macOS may
+/// be asking for access to their folder, which can take a while), the page is told which pictures
+/// they are, so it switches to them at once and Pinboard itself never flashes first. Then, in the
+/// background, each real picture file is described from Spotlight (`mdls`, so nothing is decoded
+/// here), one the scan doesn't list is added to the library so it can be shown, and the page is told
+/// again. Only picture files are taken.
 fn open_files(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
+    use std::sync::atomic::Ordering::SeqCst;
     let library = app.state::<Arc<Library>>().inner().clone();
+    trace(&format!("Finder opened {} file(s)", urls.len()));
+    let mut ids = Vec::new();
+    let mut paths = Vec::new();
+    for url in urls {
+        let Ok(path) = url.to_file_path() else { continue };
+        let Some(text) = path.to_str() else { continue };
+        if index::is_image(text) {
+            ids.push(index::id_for(text));
+            paths.push(path);
+        }
+    }
+    if ids.is_empty() {
+        return;
+    }
+    // The first pictures, arriving within moments of launch, are what Pinboard was opened for.
+    let first = !library.any_opened.swap(true, SeqCst);
+    let cold = first && STARTED.get().is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(8));
+    {
+        let mut pending = library.pending.lock().unwrap();
+        pending.ids.extend(ids);
+        pending.cold |= cold;
+    }
+    let _ = app.emit("opened", ());
+    // A window that's up comes forward; a hidden one is shown by the page once it has switched to
+    // the picture. If the page can't (still loading, or broken), it's shown anyway after a moment.
+    if let Some(window) = app.get_webview_window("main") {
+        if library.shown.load(SeqCst) && window.is_visible().unwrap_or(false) {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        } else {
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(2500));
+                if !window.is_visible().unwrap_or(false) {
+                    trace("shown by the 2.5 s backup (the page didn't)");
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            });
+        }
+    }
     let app = app.clone();
     std::thread::spawn(move || {
         let home = home().map(|h| h.to_string_lossy().to_string()).unwrap_or_default();
-        let mut ids = Vec::new();
-        for url in urls {
-            let Ok(path) = url.to_file_path() else { continue };
-            let Some(text) = path.to_str() else { continue };
-            if !index::is_image(text) || !path.is_file() {
+        let mut records = Vec::new();
+        for path in paths {
+            if !path.is_file() {
                 continue;
             }
-            let id = index::id_for(text);
+            let Some(photo) = describe(&path, &home) else { continue };
+            let id = photo.id.clone();
             if !library.photos.read().unwrap().contains_key(&id) {
-                let Some(photo) = describe(&path, &home) else { continue };
                 library.photos.write().unwrap().insert(id.clone(), entry_for(&photo));
-                library.opened.lock().unwrap().insert(id.clone(), photo);
+                library.opened.lock().unwrap().insert(id, photo.clone());
             }
-            ids.push(id);
+            records.push(photo);
         }
-        if ids.is_empty() {
-            return;
-        }
-        // The first pictures, arriving within moments of launch, are what Pinboard was opened for.
-        let first = !library.any_opened.swap(true, std::sync::atomic::Ordering::SeqCst);
-        let cold = first && STARTED.get().is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(8));
-        {
-            let mut pending = library.pending.lock().unwrap();
-            pending.ids.extend(ids);
-            pending.cold |= cold;
-        }
-        let _ = app.emit("opened", ());
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
+        trace(&format!("described {}", records.len()));
+        if !records.is_empty() {
+            library.pending.lock().unwrap().records.extend(records);
+            let _ = app.emit("opened", ());
         }
     });
 }
@@ -367,25 +413,38 @@ fn describe(path: &Path, home: &str) -> Option<Photo> {
 struct Opened {
     /// What Finder opened, in order.
     ids: Vec<String>,
-    /// Records for any of them the scan doesn't list.
+    /// Spotlight's record for each (the library's own may not have loaded yet).
     extra: Vec<Photo>,
     /// Pinboard was launched to show them: closing the viewer closes the window, like Preview.
     cold: bool,
 }
 
-/// The pictures Finder opened since the window last asked (each is handed over once).
+/// What Finder opened since the page last asked, and Spotlight's records for those described since
+/// (each handed over once; the records can come a moment after their ids).
 #[tauri::command]
 fn take_opened(library: State<'_, Arc<Library>>) -> Opened {
-    let Pending { ids, cold } = std::mem::take(&mut *library.pending.lock().unwrap());
-    let opened = library.opened.lock().unwrap();
-    let extra = ids.iter().filter_map(|id| opened.get(id).cloned()).collect();
-    Opened { ids, extra, cold }
+    let Pending { ids, records, cold } = std::mem::take(&mut *library.pending.lock().unwrap());
+    trace(&format!("page took {} picture(s), {} record(s) (cold {cold})", ids.len(), records.len()));
+    Opened { ids, extra: records, cold }
+}
+
+/// The page has decided what to show (Pinboard, or a picture from Finder on its own): show the
+/// window. It starts hidden, so nothing half-ready flashes.
+#[tauri::command]
+fn show_window(app: tauri::AppHandle, library: State<'_, Arc<Library>>) {
+    trace("page asked to show the window");
+    library.shown.store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 }
 
 /// Closing a picture opened from Finder puts the window away, the way closing a Preview window
 /// does. Pinboard keeps running; its Dock icon brings it back.
 #[tauri::command]
 fn hide_window(app: tauri::AppHandle) {
+    trace("page put the window away");
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
@@ -524,6 +583,7 @@ fn own_page(url: &tauri::Url) -> bool {
 
 pub fn run() {
     STARTED.get_or_init(std::time::Instant::now);
+    trace("started");
     let library = Arc::new(Library::default());
     let workers = Arc::new(Semaphore::new(THUMB_WORKERS));
     let protocol_library = library.clone();
@@ -535,6 +595,7 @@ pub fn run() {
         // Photos and Preview: Pinboard keeps its place, and the Dock icon brings it back. ⌘Q quits.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                trace("window closed (put away)");
                 api.prevent_close();
                 let _ = window.hide();
                 let _ = window.app_handle().emit("hidden", ());
@@ -571,10 +632,25 @@ pub fn run() {
                 responder.respond(response);
             });
         })
-        .invoke_handler(tauri::generate_handler![scan_library, reveal, open_photo, copy_photo, open_privacy_settings, cache_size, clear_cache, reveal_folder, reveal_photos, open_photos, copy_photos, trash, put_back, take_opened, hide_window, is_default_viewer, set_default_viewer])
+        .invoke_handler(tauri::generate_handler![scan_library, reveal, open_photo, copy_photo, open_privacy_settings, cache_size, clear_cache, reveal_folder, reveal_photos, open_photos, copy_photos, trash, put_back, take_opened, show_window, hide_window, is_default_viewer, set_default_viewer])
         .build(tauri::generate_context!())
         .expect("error while building Pinboard")
         .run(|app, event| match event {
+            // The window starts hidden and the page shows it when it's ready. If the page never
+            // does (it failed to load), show it anyway, so Pinboard is never invisible.
+            tauri::RunEvent::Ready => {
+                trace("ready");
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    let shown = app.state::<Arc<Library>>().shown.load(std::sync::atomic::Ordering::SeqCst);
+                    if let (false, Some(window)) = (shown, app.get_webview_window("main")) {
+                        trace("shown by the 4 s backup (the page didn't)");
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                });
+            }
             // A picture double-clicked in Finder, or sent with Open With (at launch, or later).
             tauri::RunEvent::Opened { urls } => open_files(app, urls),
             // The Dock icon clicked with the window put away: bring Pinboard back.

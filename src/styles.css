@@ -130,13 +130,9 @@ body:has([role='toolbar'][aria-label^='Ticked photos']) [data-bd-toaster] {
   translate: 0 -84px;
 }
 
-/* After the grid is dealt again for a new width, its cards glide to their new places. */
-.gliding > [data-photo] {
-  transition:
-    left 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    top 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    width 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    height 420ms cubic-bezier(0.22, 1, 0.36, 1);
+/* Cards glide to new places on a transform from their top-left corner (see Masonry). */
+[data-photo] {
+  transform-origin: 0 0;
 }
 
 /* A strip that scrolls without showing a bar. */

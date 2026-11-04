@@ -1,7 +1,7 @@
 {
   "name": "pinboard",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Every picture on your Mac, in one place. A photo viewer for macOS.",
   "license": "MIT",
   "repository": {

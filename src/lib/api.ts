@@ -38,6 +38,9 @@ export const putBack = (ids: string[]) => invoke<string[]>('put_back', { ids });
 /** Pictures Finder asked Pinboard to open (a double-click, Open With): their ids, in order, and
  * records for any the scan doesn't list. Each is handed over once. */
 export const takeOpened = () => invoke<{ ids: string[]; extra: Photo[]; cold: boolean }>('take_opened');
+/** Shows the window, once the page has decided what it shows (it starts hidden, so nothing
+ * half-ready flashes). */
+export const showWindow = () => invoke('show_window');
 /** Puts the window away (closing a picture opened from Finder); the Dock icon brings it back. */
 export const hideWindow = () => invoke('hide_window');
 /** Whether pictures open in Pinboard from Finder, and changing that (off goes back to Preview). */
