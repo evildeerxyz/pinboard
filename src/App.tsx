@@ -328,7 +328,7 @@ export function App() {
   // Moving to the Trash, and Undo from the toast puts them back.
   const trash = useCallback(async (list: Indexed[]) => {
     const { trashed, failed } = await trashPhotos(list.map((p) => p.id));
-    const gone = new Set(trashed.map((t) => t.id));
+    const gone = new Set(trashed);
     const records = list.filter((p) => gone.has(p.id));
     setPhotos((now) => now && now.filter((p) => !gone.has(p.id)));
     setSelected(new Set());

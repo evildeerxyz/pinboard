@@ -3,10 +3,12 @@
 // Needs the Vite dev server (npm run vite:dev).   node scripts/check.mjs
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import puppeteer from 'puppeteer-core';
 
-const DATA = process.env.PINBOARD_HARNESS ?? '/tmp/pinboard-harness';
+// The dump holds your own file names and thumbnails, so it lives in your private temporary folder.
+const DATA = process.env.PINBOARD_HARNESS ?? join(tmpdir(), 'pinboard-harness');
 const OUT = join(DATA, 'check');
 const CHROME = process.env.CHROME_PATH ?? `${process.env.HOME}/.cache/puppeteer/chrome/mac_arm-148.0.7778.97/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`;
 mkdirSync(OUT, { recursive: true });
@@ -25,11 +27,14 @@ const lasts = tally((p) => p.folder.split('/').pop());
 const DEEP = tally((p) => (p.folder.split('/').length === 2 ? p.folder.split('/')[1] : ''))
   .find((name) => name && lasts.filter((l) => l.toLowerCase().includes(name.toLowerCase())).length === 1);
 const MONTH = new Date(photos[0].taken).toLocaleString('en-US', { month: 'long' }).toLowerCase();
+// Serves the dumped thumbnails to the page, on this Mac only, and only by id (16 hex digits), so
+// no other file can be asked for.
 const server = createServer((req, res) => {
-  const file = join(DATA, 'thumbs', decodeURIComponent(new URL(req.url, 'http://x').pathname.split('/').pop()));
-  if (!existsSync(file)) return void res.writeHead(404).end();
+  const id = new URL(req.url, 'http://x').pathname.split('/').pop();
+  const file = /^[0-9a-f]{16}$/.test(id) ? join(DATA, 'thumbs', id) : null;
+  if (!file || !existsSync(file)) return void res.writeHead(404).end();
   res.writeHead(200, { 'content-type': 'image/jpeg' }).end(readFileSync(file));
-}).listen(1431);
+}).listen(1431, '127.0.0.1');
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--hide-scrollbars'] });
 const page = await browser.newPage();
@@ -38,8 +43,8 @@ await page.evaluateOnNewDocument((lib) => {
   window.__calls = [];
   window.__shapes = Object.fromEntries(JSON.parse(lib).map((p) => [p.id, p.width && p.height ? p.width / p.height : 0]));
   window.__TAURI_INTERNALS__ = {
-    invoke: async (cmd, args) => (window.__calls.push([cmd, args]), cmd === 'scan_library' ? { photos: JSON.parse(lib), blocked: [] } : cmd === 'cache_size' ? 123_400_000 : cmd === 'trash' ? { trashed: args.ids.map((id) => ({ id, from: `/Users/x/${id}.jpg`, to: `/Users/x/.Trash/${id}.jpg`, modified: 0 })), failed: [] } : cmd === 'put_back' ? args.items.map((t) => t.id) : null),
-    convertFileSrc: (id) => `http://localhost:1431/thumb/${encodeURIComponent(id)}`,
+    invoke: async (cmd, args) => (window.__calls.push([cmd, args]), cmd === 'scan_library' ? { photos: JSON.parse(lib), blocked: [] } : cmd === 'cache_size' ? 123_400_000 : cmd === 'trash' ? { trashed: args.ids, failed: [] } : cmd === 'put_back' ? args.ids : null),
+    convertFileSrc: (id) => `http://127.0.0.1:1431/thumb/${encodeURIComponent(id)}`,
     transformCallback: () => 0,
   };
   // The desktop behind the see-through window.

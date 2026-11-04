@@ -3,21 +3,25 @@
 //   node scripts/shot.mjs [out-dir]
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import puppeteer from 'puppeteer-core';
 
-const DATA = process.env.PINBOARD_HARNESS ?? '/tmp/pinboard-harness';
+// The dump holds your own file names and thumbnails, so it lives in your private temporary folder.
+const DATA = process.env.PINBOARD_HARNESS ?? join(tmpdir(), 'pinboard-harness');
 const OUT = process.argv[2] ?? join(DATA, 'shots');
 const CHROME = process.env.CHROME_PATH ?? `${process.env.HOME}/.cache/puppeteer/chrome/mac_arm-148.0.7778.97/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`;
 mkdirSync(OUT, { recursive: true });
 
 const library = readFileSync(join(DATA, 'library.json'), 'utf8');
+// Serves the dumped thumbnails to the page, on this Mac only, and only by id (16 hex digits), so
+// no other file can be asked for.
 const thumbs = createServer((req, res) => {
-  const id = decodeURIComponent(new URL(req.url, 'http://x').pathname.split('/').pop());
-  const file = join(DATA, 'thumbs', id);
-  if (!existsSync(file)) return void res.writeHead(404).end();
-  res.writeHead(200, { 'content-type': 'image/jpeg', 'access-control-allow-origin': '*' }).end(readFileSync(file));
-}).listen(1431);
+  const id = new URL(req.url, 'http://x').pathname.split('/').pop();
+  const file = /^[0-9a-f]{16}$/.test(id) ? join(DATA, 'thumbs', id) : null;
+  if (!file || !existsSync(file)) return void res.writeHead(404).end();
+  res.writeHead(200, { 'content-type': 'image/jpeg' }).end(readFileSync(file));
+}).listen(1431, '127.0.0.1');
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--hide-scrollbars'] });
 const page = await browser.newPage();
@@ -25,7 +29,7 @@ await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 2 });
 await page.evaluateOnNewDocument((lib) => {
   window.__TAURI_INTERNALS__ = {
     invoke: async (cmd) => (cmd === 'scan_library' ? { photos: JSON.parse(lib), blocked: [] } : null),
-    convertFileSrc: (id) => `http://localhost:1431/thumb/${encodeURIComponent(id)}`,
+    convertFileSrc: (id) => `http://127.0.0.1:1431/thumb/${encodeURIComponent(id)}`,
     transformCallback: () => 0,
   };
 }, library);

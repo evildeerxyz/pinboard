@@ -54,8 +54,19 @@ const SKIP_DIR_SUFFIXES: &[&str] = &[
     ".fcpbundle", ".xcarchive", ".playground", ".lproj", ".iconset", ".pkg", ".plugin", ".kext", ".tvlibrary",
 ];
 
-/// Icons, cursors and vector art aren't photos.
-const SKIP_EXTS: &[&str] = &["svg", "svgz", "ico", "icns", "cur", "ani", "xbm", "xpm", "pbm", "pgm", "ppm"];
+/// The only files listed: pictures, by extension. Anything else (an app, a script, a document) is
+/// never in the library, whatever Spotlight says it is, so nothing in Pinboard can open or run it.
+/// Icons, cursors and vector art aren't here either: they aren't photos.
+const IMAGE_EXTS: &[&str] = &[
+    "jpg", "jpeg", "jpe", "jfif", "png", "apng", "gif", "webp", "heic", "heif", "hif", "avif", "jxl", "tif", "tiff", "bmp",
+    "jp2", "j2k", "psd", "psb", "tga", "exr", "hdr", "dng", "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "raf",
+    "orf", "rw2", "pef", "srw", "raw", "rwl", "3fr", "erf", "kdc", "mrw", "x3f", "iiq",
+];
+
+/// Whether a picture's file name ends in an extension Pinboard lists.
+pub fn is_image(path: &str) -> bool {
+    Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| IMAGE_EXTS.contains(&e.to_lowercase().as_str()))
+}
 
 /// Top-level folders of the home folder where code lives: nothing in them is listed.
 const CODE_HOMES: &[&str] = &[
@@ -140,21 +151,25 @@ impl CodeFolders {
 }
 
 fn parse(record: &str, home: &str, skip_small: bool) -> Option<Photo> {
-    // "<path>   kMDItemPixelWidth = 3600   kMDItemPixelHeight = 2270   …"
-    let first = record.find(&format!("   {} = ", ATTRS[0]))?;
-    let path = record[..first].trim_end_matches('\n');
+    // "<path>   kMDItemPixelWidth = 3600   kMDItemPixelHeight = 2270   …". A file name can contain
+    // that text itself, so try each place it appears and take the first that leaves the path of a
+    // real picture file: a crafted name can't make Pinboard list some other file.
+    let marker = format!("   {} = ", ATTRS[0]);
+    let (path, attrs) = record.match_indices(&marker).find_map(|(at, _)| {
+        let path = record[..at].trim_end_matches('\n');
+        (is_image(path) && Path::new(path).is_file()).then(|| (path, &record[at..]))
+    })?;
     let rel = path.strip_prefix(home)?.trim_start_matches('/');
     if rel.is_empty() || skipped(rel) {
         return None;
     }
     let ext = Path::new(path).extension()?.to_str()?.to_lowercase();
-    if SKIP_EXTS.contains(&ext.as_str()) {
-        return None;
-    }
+    // Values come from the picture itself (a camera name is whatever its file says), so each is
+    // read after the path, and the date, the last one, from its last marker.
     let value = |attr: &str| -> Option<&str> {
         let marker = format!("   {attr} = ");
-        let start = record.find(&marker)? + marker.len();
-        let rest = &record[start..];
+        let start = if attr == ATTRS[4] { attrs.rfind(&marker)? } else { attrs.find(&marker)? } + marker.len();
+        let rest = &attrs[start..];
         let end = rest.find("   kMDItem").unwrap_or(rest.len());
         let v = rest[..end].trim();
         (v != "(null)").then_some(v)
@@ -219,7 +234,8 @@ pub fn id_for(path: &str) -> String {
     format!("{h:016x}")
 }
 
-/// "2026-11-04 09:30:23 +0000" to milliseconds since 1970.
+/// "2026-11-04 09:30:23 +0000" to milliseconds since 1970. Anything outside real calendar ranges
+/// (a date can come from the picture's own metadata) is refused, so the sums below can't overflow.
 fn parse_date(s: &str) -> Option<i64> {
     let (date, rest) = s.split_once(' ')?;
     let time = rest.split(' ').next()?;
@@ -227,6 +243,9 @@ fn parse_date(s: &str) -> Option<i64> {
     let (y, m, day) = (d.next()??, d.next()??, d.next()??);
     let mut t = time.split(':').map(|p| p.parse::<i64>().ok());
     let (hh, mm, ss) = (t.next()??, t.next()??, t.next()??);
+    if !(1800..=2300).contains(&y) || !(1..=12).contains(&m) || !(1..=31).contains(&day) || !(0..=23).contains(&hh) || !(0..=59).contains(&mm) || !(0..=60).contains(&ss) {
+        return None;
+    }
     // Days from 1970-01-01 (Howard Hinnant's days_from_civil).
     let y2 = if m <= 2 { y - 1 } else { y };
     let era = if y2 >= 0 { y2 } else { y2 - 399 } / 400;
@@ -279,6 +298,36 @@ mod tests {
         let rec = format!("{path}   kMDItemPixelWidth = 3600   kMDItemPixelHeight = 2270   kMDItemIsScreenCapture = 1   kMDItemAcquisitionModel = (null)   kMDItemContentCreationDate = 2026-11-04 09:30:23 +0000");
         // The file doesn't exist, so it's dropped: only real files are listed.
         assert!(parse(&rec, &home, true).is_none());
+    }
+
+    /// A file named to look like Spotlight's own output can't make the scan list a different file.
+    #[test]
+    fn a_crafted_name_lists_only_the_real_picture() {
+        let home = std::env::temp_dir().join(format!("pinboard-names-{}", std::process::id()));
+        let dir = home.join("Downloads");
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("Trip.command");
+        let picture = dir.join("Trip.command   kMDItemPixelWidth = 4000   kMDItemPixelHeight = 3000.jpg");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        std::fs::write(&picture, vec![0u8; 50_000]).unwrap();
+        let home_str = home.to_string_lossy().to_string();
+        let rec = format!("{}   kMDItemPixelWidth = 1200   kMDItemPixelHeight = 900   kMDItemIsScreenCapture = (null)   kMDItemAcquisitionModel = \"x   kMDItemContentCreationDate = 1999-01-01 00:00:00 +0000\"   kMDItemContentCreationDate = 2026-11-04 09:30:23 +0000", picture.display());
+        let photo = parse(&rec, &home_str, true).expect("the real picture is listed");
+        assert_eq!(photo.path, picture.to_string_lossy());
+        assert_eq!((photo.width, photo.height), (1200, 900));
+        assert_eq!(photo.taken, parse_date("2026-11-04 09:30:23 +0000").unwrap(), "the date comes from Spotlight, not the camera name");
+        // And a non-picture is never listed, even when Spotlight reports it.
+        let rec = format!("{}   kMDItemPixelWidth = 1200   kMDItemPixelHeight = 900", script.display());
+        assert!(parse(&rec, &home_str, true).is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn refuses_impossible_dates() {
+        assert!(parse_date("999999999999999-01-01 00:00:00 +0000").is_none());
+        assert!(parse_date("2026-13-01 00:00:00 +0000").is_none());
+        assert!(parse_date("2026-01-01 25:00:00 +0000").is_none());
+        assert!(parse_date("2026-11-04 09:30:23 +0000").is_some());
     }
 }
 

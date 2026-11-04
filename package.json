@@ -1,7 +1,7 @@
 {
   "name": "pinboard",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Every picture on your Mac, in one place. A photo viewer for macOS.",
   "license": "MIT",
   "repository": {
@@ -15,7 +15,8 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "tauri": "tauri",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "release": "RUSTFLAGS=\"--remap-path-prefix=$HOME=~\" tauri build --target universal-apple-darwin"
   },
   "dependencies": {
     "@basedraft/ui": "^0.3.1",

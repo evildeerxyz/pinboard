@@ -51,7 +51,7 @@ Pinboard finds the photos, screenshots and saved images spread across your home 
 
 You need macOS 13 Ventura or later, on Apple silicon or Intel.
 
-1. Download **Pinboard-0.1.0.dmg** from the [latest release](https://github.com/evildeerxyz/pinboard/releases/latest).
+1. Download the DMG (`Pinboard-<version>.dmg`) from the [latest release](https://github.com/evildeerxyz/pinboard/releases/latest).
 2. Open the DMG and drag **Pinboard** into **Applications**.
 3. Open Pinboard from your Applications folder.
 
@@ -107,11 +107,11 @@ npm run build   # makes src-tauri/target/release/bundle/macos/Pinboard.app
 
 Copy `Pinboard.app` into Applications. An app you build yourself opens straight away, with no Gatekeeper step.
 
-To build one app that runs on both Apple silicon and Intel:
+To build one app that runs on both Apple silicon and Intel, the way releases are made:
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-npm run tauri build -- --target universal-apple-darwin
+npm run release   # makes src-tauri/target/universal-apple-darwin/release/bundle/macos/Pinboard.app
 ```
 
 ## Keyboard shortcuts
@@ -130,16 +130,16 @@ npm run tauri build -- --target universal-apple-darwin
 
 ## Privacy
 
-Pinboard has no account and no analytics, and it makes no network requests. It gets the list of pictures from Spotlight on your Mac, and makes small thumbnails as photos scroll into view, kept in `~/Library/Caches/app.pinboard.photos`. It only changes your files when you move something to the Trash, and you can put that back.
+Pinboard has no account and no analytics, and it makes no network requests. It gets the list of pictures from Spotlight on your Mac, and makes small thumbnails as photos scroll into view, kept in `~/Library/Caches/app.pinboard.photos`. It only changes your files when you move something to the Trash, and you can put that back. See [SECURITY.md](SECURITY.md) for how it keeps the window from reaching anything else, and how to report a problem.
 
 ## How it's built
 
 - [Tauri 2](https://tauri.app) with a Rust backend, and a React interface built with [basedraft UI](https://www.npmjs.com/package/@basedraft/ui).
 - **Index:** one `mdfind` query over the home folder. Code projects are spotted by their project files.
-- **Thumbnails:** made by macOS's ImageIO, served to the window through a custom protocol, and cached by size and modification time.
+- **Thumbnails:** made by Quick Look, in macOS's own sandboxed thumbnail service, so no picture is ever decoded inside Pinboard. Served to the window through a custom protocol, and cached by size and modification time.
 - **Trash:** `NSFileManager`'s `trashItemAtURL`, the same as Finder, so Put Back works.
 
-**Tests:** `cargo test` in `src-tauri` covers the index and thumbnails. `cargo test trash_and_put_back -- --ignored` moves a throwaway file to your Trash and back. `node scripts/check.mjs` clicks through the interface in headless Chrome, against a library dump and with Vite running (`npm run vite:dev`). `cargo test --release harness -- --ignored` writes that dump from your own Mac to `/tmp/pinboard-harness`.
+**Tests:** `cargo test` in `src-tauri` covers the index and thumbnails. `cargo test trash_and_put_back -- --ignored` moves a throwaway file to your Trash and back. `node scripts/check.mjs` clicks through the interface in headless Chrome, against a library dump and with Vite running (`npm run vite:dev`). `cargo test --release harness -- --ignored` writes that dump from your own Mac to `pinboard-harness` in your private temporary folder (`$TMPDIR`).
 
 ## Credits
 

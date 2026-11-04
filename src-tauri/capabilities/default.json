@@ -1,13 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: core APIs, dragging the window by its empty top edge, and knowing when it's full screen.",
+  "description": "The main window gets only what it uses: knowing when it's full screen or resized, and dragging or zooming the window by its empty top edge. Pinboard's own commands (listed in src/lib.rs) only ever reach pictures in the library.",
   "windows": [
     "main"
   ],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-is-fullscreen",
     "core:window:allow-start-dragging",
-    "core:window:allow-is-fullscreen"
+    "core:window:allow-internal-toggle-maximize"
   ]
 }

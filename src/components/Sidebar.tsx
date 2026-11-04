@@ -35,7 +35,8 @@ const PLACES: Record<string, { icon: Icon; color: string }> = {
 const OTHER_COLORS = ['#f26b5b', '#9b7bf5', '#14a9c4', '#e8a512', '#f25c78'];
 
 export function PlaceSquare({ name, size = 22, round }: { name: string; size?: number; round?: boolean }) {
-  const place = PLACES[name] ?? { icon: FilmSlateIcon, color: OTHER_COLORS[[...name].reduce((n, c) => n + c.charCodeAt(0), 0) % OTHER_COLORS.length] };
+  // Own keys only: a folder called "constructor" or "toString" mustn't pick up something built in.
+  const place = (Object.hasOwn(PLACES, name) ? PLACES[name] : undefined) ?? { icon: FilmSlateIcon, color: OTHER_COLORS[[...name].reduce((n, c) => n + c.charCodeAt(0), 0) % OTHER_COLORS.length] };
   const I = place.icon;
   return (
     <span className={`grid shrink-0 place-items-center text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.3)] [&_svg]:drop-shadow-[0_0.5px_0.5px_rgb(0_0_0/0.25)] ${round ? 'rounded-full' : 'rounded-[6px]'}`} style={{ width: size, height: size, background: place.color }}>

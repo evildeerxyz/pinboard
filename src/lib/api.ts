@@ -28,12 +28,10 @@ export const revealPhotos = (ids: string[]) => invoke('reveal_photos', { ids });
 export const openPhotos = (ids: string[]) => invoke('open_photos', { ids });
 export const copyPhotos = (ids: string[]) => invoke('copy_photos', { ids });
 
-/** A picture moved to the Trash, with where it went, to put it back. */
-export type Trashed = { id: string; from: string; to: string; modified: number };
-/** Moves pictures to the Trash (never deletes them); `failed` are the ids that couldn't go. */
-export const trashPhotos = (ids: string[]) => invoke<{ trashed: Trashed[]; failed: string[] }>('trash', { ids });
-/** Undo: puts them back where they were. The ids that went back. */
-export const putBack = (items: Trashed[]) => invoke<string[]>('put_back', { items });
+/** Moves pictures to the Trash (never deletes them): the ids that went, and the ids that couldn't. */
+export const trashPhotos = (ids: string[]) => invoke<{ trashed: string[]; failed: string[] }>('trash', { ids });
+/** Undo: puts pictures Pinboard moved to the Trash back where they were. The ids that went back. */
+export const putBack = (ids: string[]) => invoke<string[]>('put_back', { ids });
 
 /** Opens a folder (relative to the home folder) in Finder. */
 export const revealFolder = (folder: string) => invoke('reveal_folder', { folder });
